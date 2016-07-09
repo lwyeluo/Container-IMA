@@ -118,7 +118,6 @@ static int ima_measurements_show(struct seq_file *m, void *v)
 	/* the list never shrinks, so we don't need a lock here */
 	struct ima_queue_entry *qe = v;
 	struct ima_template_entry *e;
-	char *template_name;
 	int namelen;
 	u32 pcr = CONFIG_IMA_MEASURE_PCR_IDX;
 	bool is_ima_template = false;
@@ -129,28 +128,25 @@ static int ima_measurements_show(struct seq_file *m, void *v)
 	if (e == NULL)
 		return -1;
 
-	template_name = (e->template_desc->name[0] != '\0') ?
-	    e->template_desc->name : e->template_desc->fmt;
-
 	/*
 	 * 1st: PCRIndex
 	 * PCR used is always the same (config option) in
 	 * little-endian format
 	 */
-	ima_putc(m, &pcr, sizeof(pcr));
+	ima_putc(m, &pcr, sizeof pcr);
 
 	/* 2nd: template digest */
 	ima_putc(m, e->digest, TPM_DIGEST_SIZE);
 
 	/* 3rd: template name size */
-	namelen = strlen(template_name);
-	ima_putc(m, &namelen, sizeof(namelen));
+	namelen = strlen(e->template_desc->name);
+	ima_putc(m, &namelen, sizeof namelen);
 
 	/* 4th:  template name */
-	ima_putc(m, template_name, namelen);
+	ima_putc(m, e->template_desc->name, namelen);
 
 	/* 5th:  template length (except for 'ima' template) */
-	if (strcmp(template_name, IMA_TEMPLATE_IMA_NAME) == 0)
+	if (strcmp(e->template_desc->name, IMA_TEMPLATE_IMA_NAME) == 0)
 		is_ima_template = true;
 
 	if (!is_ima_template)
@@ -164,8 +160,6 @@ static int ima_measurements_show(struct seq_file *m, void *v)
 
 		if (is_ima_template && strcmp(field->field_id, "d") == 0)
 			show = IMA_SHOW_BINARY_NO_FIELD_LEN;
-		if (is_ima_template && strcmp(field->field_id, "n") == 0)
-			show = IMA_SHOW_BINARY_OLD_STRING_FMT;
 		field->field_show(m, show, &e->template_data[i]);
 	}
 	return 0;
@@ -190,9 +184,9 @@ static const struct file_operations ima_measurements_ops = {
 	.release = seq_release,
 };
 
-void ima_print_digest(struct seq_file *m, u8 *digest, u32 size)
+void ima_print_digest(struct seq_file *m, u8 *digest, int size)
 {
-	u32 i;
+	int i;
 
 	for (i = 0; i < size; i++)
 		seq_printf(m, "%02x", *(digest + i));
@@ -204,16 +198,12 @@ static int ima_ascii_measurements_show(struct seq_file *m, void *v)
 	/* the list never shrinks, so we don't need a lock here */
 	struct ima_queue_entry *qe = v;
 	struct ima_template_entry *e;
-	char *template_name;
 	int i;
 
 	/* get entry */
 	e = qe->entry;
 	if (e == NULL)
 		return -1;
-
-	template_name = (e->template_desc->name[0] != '\0') ?
-	    e->template_desc->name : e->template_desc->fmt;
 
 	/* 1st: PCR used (config option) */
 	seq_printf(m, "%2d ", CONFIG_IMA_MEASURE_PCR_IDX);
@@ -222,7 +212,7 @@ static int ima_ascii_measurements_show(struct seq_file *m, void *v)
 	ima_print_digest(m, e->digest, TPM_DIGEST_SIZE);
 
 	/* 3th:  template name */
-	seq_printf(m, " %s", template_name);
+	seq_printf(m, " %s", e->template_desc->name);
 
 	/* 4th:  template specific data */
 	for (i = 0; i < e->template_desc->num_fields; i++) {
@@ -296,23 +286,18 @@ static struct dentry *runtime_measurements_count;
 static struct dentry *violations;
 static struct dentry *ima_policy;
 
-enum ima_fs_flags {
-	IMA_FS_BUSY,
-};
-
-static unsigned long ima_fs_flags;
-
+static atomic_t policy_opencount = ATOMIC_INIT(1);
 /*
  * ima_open_policy: sequentialize access to the policy file
  */
-static int ima_open_policy(struct inode *inode, struct file *filp)
+static int ima_open_policy(struct inode * inode, struct file * filp)
 {
 	/* No point in being allowed to open it if you aren't going to write */
 	if (!(filp->f_flags & O_WRONLY))
 		return -EACCES;
-	if (test_and_set_bit(IMA_FS_BUSY, &ima_fs_flags))
-		return -EBUSY;
-	return 0;
+	if (atomic_dec_and_test(&policy_opencount))
+		return 0;
+	return -EBUSY;
 }
 
 /*
@@ -324,16 +309,10 @@ static int ima_open_policy(struct inode *inode, struct file *filp)
  */
 static int ima_release_policy(struct inode *inode, struct file *file)
 {
-	const char *cause = valid_policy ? "completed" : "failed";
-
-	pr_info("IMA: policy update %s\n", cause);
-	integrity_audit_msg(AUDIT_INTEGRITY_STATUS, NULL, NULL,
-			    "policy_update", cause, !valid_policy, 0);
-
 	if (!valid_policy) {
 		ima_delete_rules();
 		valid_policy = 1;
-		clear_bit(IMA_FS_BUSY, &ima_fs_flags);
+		atomic_set(&policy_opencount, 1);
 		return 0;
 	}
 	ima_update_policy();

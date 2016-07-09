@@ -37,8 +37,10 @@ void ima_free_template_entry(struct ima_template_entry *entry)
 /*
  * ima_alloc_init_template - create and initialize a new template entry
  */
-int ima_alloc_init_template(struct ima_event_data *event_data,
-			    struct ima_template_entry **entry)
+int ima_alloc_init_template(struct integrity_iint_cache *iint,
+			    struct file *file, const unsigned char *filename,
+			    struct evm_ima_xattr_data *xattr_value,
+			    int xattr_len, struct ima_template_entry **entry)
 {
 	struct ima_template_desc *template_desc = ima_template_desc_current();
 	int i, result = 0;
@@ -53,7 +55,8 @@ int ima_alloc_init_template(struct ima_event_data *event_data,
 		struct ima_template_field *field = template_desc->fields[i];
 		u32 len;
 
-		result = field->field_init(event_data,
+		result = field->field_init(iint, file, filename,
+					   xattr_value, xattr_len,
 					   &((*entry)->template_data[i]));
 		if (result != 0)
 			goto out;
@@ -89,8 +92,8 @@ int ima_store_template(struct ima_template_entry *entry,
 		       int violation, struct inode *inode,
 		       const unsigned char *filename)
 {
-	static const char op[] = "add_template_measure";
-	static const char audit_cause[] = "hashing_error";
+	const char *op = "add_template_measure";
+	const char *audit_cause = "hashing_error";
 	char *template_name = entry->template_desc->name;
 	int result;
 	struct {
@@ -126,20 +129,18 @@ int ima_store_template(struct ima_template_entry *entry,
  * value is invalidated.
  */
 void ima_add_violation(struct file *file, const unsigned char *filename,
-		       struct integrity_iint_cache *iint,
 		       const char *op, const char *cause)
 {
 	struct ima_template_entry *entry;
-	struct inode *inode = file_inode(file);
-	struct ima_event_data event_data = {iint, file, filename, NULL, 0,
-					    cause};
+	struct inode *inode = file->f_dentry->d_inode;
 	int violation = 1;
 	int result;
 
 	/* can overflow, only indicator */
 	atomic_long_inc(&ima_htable.violations);
 
-	result = ima_alloc_init_template(&event_data, &entry);
+	result = ima_alloc_init_template(NULL, file, filename,
+					 NULL, 0, &entry);
 	if (result < 0) {
 		result = -ENOMEM;
 		goto err_out;
@@ -159,10 +160,10 @@ err_out:
  * @function: calling function (FILE_CHECK, BPRM_CHECK, MMAP_CHECK, MODULE_CHECK)
  *
  * The policy is defined in terms of keypairs:
- *		subj=, obj=, type=, func=, mask=, fsmagic=
+ * 		subj=, obj=, type=, func=, mask=, fsmagic=
  *	subj,obj, and type: are LSM specific.
- *	func: FILE_CHECK | BPRM_CHECK | MMAP_CHECK | MODULE_CHECK
- *	mask: contains the permission mask
+ * 	func: FILE_CHECK | BPRM_CHECK | MMAP_CHECK | MODULE_CHECK
+ * 	mask: contains the permission mask
  *	fsmagic: hex value
  *
  * Returns IMA_MEASURE, IMA_APPRAISE mask.
@@ -172,9 +173,15 @@ int ima_get_action(struct inode *inode, int mask, int function)
 {
 	int flags = IMA_MEASURE | IMA_AUDIT | IMA_APPRAISE;
 
-	flags &= ima_policy_flag;
+	if (!ima_appraise)
+		flags &= ~IMA_APPRAISE;
 
 	return ima_match_policy(inode, function, mask, flags);
+}
+
+int ima_must_measure(struct inode *inode, int mask, int function)
+{
+	return ima_match_policy(inode, function, mask, IMA_MEASURE);
 }
 
 /*
@@ -192,9 +199,8 @@ int ima_collect_measurement(struct integrity_iint_cache *iint,
 			    struct evm_ima_xattr_data **xattr_value,
 			    int *xattr_len)
 {
-	const char *audit_cause = "failed";
 	struct inode *inode = file_inode(file);
-	const char *filename = file->f_path.dentry->d_name.name;
+	const char *filename = file->f_dentry->d_name.name;
 	int result = 0;
 	struct {
 		struct ima_digest_data hdr;
@@ -202,16 +208,10 @@ int ima_collect_measurement(struct integrity_iint_cache *iint,
 	} hash;
 
 	if (xattr_value)
-		*xattr_len = ima_read_xattr(file->f_path.dentry, xattr_value);
+		*xattr_len = ima_read_xattr(file->f_dentry, xattr_value);
 
 	if (!(iint->flags & IMA_COLLECTED)) {
 		u64 i_version = file_inode(file)->i_version;
-
-		if (file->f_flags & O_DIRECT) {
-			audit_cause = "failed(directio)";
-			result = -EACCES;
-			goto out;
-		}
 
 		/* use default hash algorithm */
 		hash.hdr.algo = ima_hash_algo;
@@ -233,10 +233,9 @@ int ima_collect_measurement(struct integrity_iint_cache *iint,
 				result = -ENOMEM;
 		}
 	}
-out:
 	if (result)
 		integrity_audit_msg(AUDIT_INTEGRITY_DATA, inode,
-				    filename, "collect_data", audit_cause,
+				    filename, "collect_data", "failed",
 				    result, 0);
 	return result;
 }
@@ -249,7 +248,7 @@ out:
  *
  * We only get here if the inode has not already been measured,
  * but the measurement could already exist:
- *	- multiple copies of the same file on either the same or
+ * 	- multiple copies of the same file on either the same or
  *	  different filesystems.
  *	- the inode was previously flushed as well as the iint info,
  *	  containing the hashing info.
@@ -261,19 +260,18 @@ void ima_store_measurement(struct integrity_iint_cache *iint,
 			   struct evm_ima_xattr_data *xattr_value,
 			   int xattr_len)
 {
-	static const char op[] = "add_template_measure";
-	static const char audit_cause[] = "ENOMEM";
+	const char *op = "add_template_measure";
+	const char *audit_cause = "ENOMEM";
 	int result = -ENOMEM;
 	struct inode *inode = file_inode(file);
 	struct ima_template_entry *entry;
-	struct ima_event_data event_data = {iint, file, filename, xattr_value,
-					    xattr_len, NULL};
 	int violation = 0;
 
 	if (iint->flags & IMA_MEASURED)
 		return;
 
-	result = ima_alloc_init_template(&event_data, &entry);
+	result = ima_alloc_init_template(iint, file, filename,
+					 xattr_value, xattr_len, &entry);
 	if (result < 0) {
 		integrity_audit_msg(AUDIT_INTEGRITY_PCR, inode, filename,
 				    op, audit_cause, result, 0);
@@ -324,14 +322,15 @@ const char *ima_d_path(struct path *path, char **pathbuf)
 {
 	char *pathname = NULL;
 
-	*pathbuf = __getname();
+	/* We will allow 11 spaces for ' (deleted)' to be appended */
+	*pathbuf = kmalloc(PATH_MAX + 11, GFP_KERNEL);
 	if (*pathbuf) {
-		pathname = d_absolute_path(path, *pathbuf, PATH_MAX);
+		pathname = d_path(path, *pathbuf, PATH_MAX + 11);
 		if (IS_ERR(pathname)) {
-			__putname(*pathbuf);
+			kfree(*pathbuf);
 			*pathbuf = NULL;
 			pathname = NULL;
 		}
 	}
-	return pathname ?: (const char *)path->dentry->d_name.name;
+	return pathname;
 }

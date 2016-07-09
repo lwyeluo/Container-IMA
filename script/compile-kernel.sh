@@ -1,17 +1,17 @@
 #!/bin/sh
 
-code_dir="/usr/src/linux-4.4.3"
-obj_dir="/usr/src/linux-4.4.3-obj"
+code_dir="/usr/src/linux-3.13"
+obj_dir="/usr/src/linux-3.13-obj"
 
 cd $code_dir
-#make menuconfig O=$obj_dir
+make menuconfig O=$obj_dir
 
 #if [ $? -ne 0 ]; then
 #	echo "[INOF] make menuconfig failed"
 #	exit 1
 #fi
 
-make -j4  modules O=$obj_dir
+make -j4 O=$obj_dir
 
 if [ $? -ne 0 ]; then
 	echo "[INOF] make menuconfig failed"
@@ -32,4 +32,4 @@ if [ $? -ne 0 ]; then
 	exit 1
 fi
 
-
+sed -i "/linux\t/s/$/& ima_tcb ima_template=\"ima\" ima_hash=\"sha1\"/g" /boot/grub/grub.cfg
