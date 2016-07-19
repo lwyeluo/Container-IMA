@@ -13,7 +13,7 @@ def execute(cmd):
     return output
 
 if __name__ == '__main__':
-    name = "dry-run-test"
+    name = "ubuntu"
 
     namespaces = ["ipc", "mnt", "net", "pid", "user", "uts"]
     short_id = execute("docker ps | grep %s | awk '{print $1}'" % name)
