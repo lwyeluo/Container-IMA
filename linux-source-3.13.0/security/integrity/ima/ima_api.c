@@ -19,6 +19,8 @@
 #include <linux/xattr.h>
 #include <linux/evm.h>
 #include <crypto/hash_info.h>
+#include <linux/mount.h>
+#include <linux/string.h>
 #include "ima.h"
 
 /*
@@ -333,6 +335,32 @@ const char *ima_d_path(struct path *path, char **pathbuf)
 	/* We will allow 11 spaces for ' (deleted)' to be appended */
 	*pathbuf = kmalloc(PATH_MAX + 11, GFP_KERNEL);
 	if (*pathbuf) {
+		char *fullpath = NULL, *newpath = NULL;
+		fullpath = kmalloc(PATH_MAX + 11, GFP_KERNEL);
+		newpath = kmalloc(PATH_MAX + 11, GFP_KERNEL);
+		if(fullpath && newpath) {
+			if(path->dentry && path->mnt && path->mnt->mnt_root) {
+				struct dentry *root = path->mnt->mnt_root;
+				struct dentry *temp = path->dentry;
+				strcat(fullpath, "/");
+				strcat(fullpath, path->dentry->d_name.name);
+
+				while(temp->d_parent != root) {
+					temp = temp->d_parent;
+					strcat(newpath, "/");
+					strcat(newpath, temp->d_name.name);
+					strcat(newpath, fullpath);
+					strcpy(fullpath, newpath);
+					memset(newpath, 0, sizeof(newpath));
+				}
+			}
+			printk("[Wu Luo] fullpath=%s\n", fullpath);
+		}
+		if(fullpath)
+			kfree(fullpath);
+		if(newpath)
+			kfree(newpath);
+
 		pathname = d_path(path, *pathbuf, PATH_MAX + 11);
 		if (IS_ERR(pathname)) {
 			kfree(*pathbuf);
