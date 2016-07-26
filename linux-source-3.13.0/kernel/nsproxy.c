@@ -26,6 +26,8 @@
 #include <linux/file.h>
 #include <linux/syscalls.h>
 
+#include <linux/ima.h>
+
 static struct kmem_cache *nsproxy_cachep;
 
 struct nsproxy init_nsproxy = {
@@ -144,7 +146,7 @@ int copy_namespaces(unsigned long flags, struct task_struct *tsk)
 	 * it along with CLONE_NEWIPC.
 	 */
 	if ((flags & (CLONE_NEWIPC | CLONE_SYSVSEM)) ==
-		(CLONE_NEWIPC | CLONE_SYSVSEM)) 
+		(CLONE_NEWIPC | CLONE_SYSVSEM))
 		return -EINVAL;
 
 	new_ns = create_new_namespaces(flags, tsk, user_ns, tsk->fs);
@@ -152,6 +154,17 @@ int copy_namespaces(unsigned long flags, struct task_struct *tsk)
 		return  PTR_ERR(new_ns);
 
 	tsk->nsproxy = new_ns;
+
+	/*
+	 * if a new namespace created, we will reset the current cPCR,
+	 * this is a hook, whose implementation is in ima_main.c
+	 */
+	if(tsk->nsproxy->pid_ns_for_children) {
+		if(tsk->nsproxy->pid_ns_for_children) {
+			ima_create_namespace(tsk->nsproxy->pid_ns_for_children);
+		}
+	}
+
 	return 0;
 }
 

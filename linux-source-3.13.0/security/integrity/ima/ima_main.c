@@ -167,14 +167,10 @@ void ima_file_free(struct file *file)
 unsigned int get_namespace(void) {
 	if(current->nsproxy) {
 		struct pid_namespace *ns = current->nsproxy->pid_ns_for_children;
-			if(ns) {
-				//printk("[Wu Luo] the number of pid namespace is %u", ns->nr_hashed);
-				if(ns->child_reaper) {
-					//printk("\tthe init pid of this namespace is %d\n", ns->child_reaper->pid);
-					return ns->child_reaper->pid;
-				}
-			}
+		if(ns) {
+			return ns->proc_inum;
 		}
+	}
 	return -1;
 }
 
@@ -191,7 +187,7 @@ static int process_measurement(struct file *file, const char *filename,
 	struct evm_ima_xattr_data *xattr_value = NULL, **xattr_ptr = NULL;
 	int xattr_len = 0;
 
-	unsigned int ns_init_pid = -1;
+	unsigned int ns_proc_num = -1;
 
 	if (!ima_initialized || !S_ISREG(inode->i_mode))
 		return 0;
@@ -247,14 +243,14 @@ static int process_measurement(struct file *file, const char *filename,
 	if (!pathname)
 		pathname = (const char *)file->f_dentry->d_name.name;
 
-	//get the number of current pid's namespace
-	ns_init_pid = get_namespace();
+	//get the proc number of current pid's namespace
+	ns_proc_num = get_namespace();
 	ns_pathname = kmalloc(PATH_MAX + 11, GFP_KERNEL);
 	if (ns_pathname && pathname) {
-		if(ns_init_pid == -1) {
+		if(ns_proc_num == -1) {
 			strcpy(ns_pathname, pathname);
 		} else {
-			sprintf(ns_pathname, "%u:%s", ns_init_pid, pathname);
+			sprintf(ns_pathname, "%u:%s", ns_proc_num, pathname);
 			//printk("[Wu Luo] the new pathname is %s\n", ns_pathname);
 			//memcpy((void*)pathname, (void*)ns_pathname, PATH_MAX + 11);
 			//kfree(ns_pathname);
@@ -365,6 +361,35 @@ int ima_module_check(struct file *file)
 	}
 	return process_measurement(file, NULL, MAY_EXEC, MODULE_CHECK);
 }
+
+/*
+ * ima_create_namespace - based on Trusted-Container.
+ * @pid_ns: pointer to the pid namespace to be created
+ *
+ * create a cPCR towards this new pid_namespace.
+ *
+ * On success return 0.  On error, return -1.
+ */
+int ima_create_namespace(struct pid_namespace* pid_ns)
+{
+	if(!pid_ns)
+		return -1;
+
+	printk("[Wu Luo] create a new namespace<proc_inum>[%u]!\n", pid_ns->proc_inum);
+
+	if(pid_ns->cpcr) {
+		printk("[Wu Luo] cpcr does not exist, create it...\n");
+		memset(pid_ns->cpcr, 0, CPCR_DATA_SIZE);
+	} else {
+		printk("[Wu Luo] cpcr exists, reset it...\n");
+		pid_ns->cpcr = kmalloc(sizeof(struct cPCR), GFP_KERNEL);
+		if(!pid_ns->cpcr)
+			return -1;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(ima_create_namespace);
 
 static int __init init_ima(void)
 {
