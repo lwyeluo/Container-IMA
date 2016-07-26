@@ -26,6 +26,9 @@
 #include <linux/ima.h>
 #include <crypto/hash_info.h>
 
+#include <linux/pid_namespace.h>
+#include <linux/string.h>
+
 #include "ima.h"
 
 int ima_initialized;
@@ -161,6 +164,20 @@ void ima_file_free(struct file *file)
 	ima_check_last_writer(iint, inode, file);
 }
 
+unsigned int get_namespace(void) {
+	if(current->nsproxy) {
+		struct pid_namespace *ns = current->nsproxy->pid_ns_for_children;
+			if(ns) {
+				//printk("[Wu Luo] the number of pid namespace is %u", ns->nr_hashed);
+				if(ns->child_reaper) {
+					//printk("\tthe init pid of this namespace is %d\n", ns->child_reaper->pid);
+					return ns->child_reaper->pid;
+				}
+			}
+		}
+	return -1;
+}
+
 static int process_measurement(struct file *file, const char *filename,
 			       int mask, int function)
 {
@@ -169,9 +186,12 @@ static int process_measurement(struct file *file, const char *filename,
 	struct ima_template_desc *template_desc = ima_template_desc_current();
 	char *pathbuf = NULL;
 	const char *pathname = NULL;
+	char *ns_pathname = NULL;
 	int rc = -ENOMEM, action, must_appraise, _func;
 	struct evm_ima_xattr_data *xattr_value = NULL, **xattr_ptr = NULL;
 	int xattr_len = 0;
+
+	unsigned int ns_init_pid = -1;
 
 	if (!ima_initialized || !S_ISREG(inode->i_mode))
 		return 0;
@@ -227,19 +247,38 @@ static int process_measurement(struct file *file, const char *filename,
 	if (!pathname)
 		pathname = (const char *)file->f_dentry->d_name.name;
 
+	//get the number of current pid's namespace
+	ns_init_pid = get_namespace();
+	ns_pathname = kmalloc(PATH_MAX + 11, GFP_KERNEL);
+	if (ns_pathname && pathname) {
+		if(ns_init_pid == -1) {
+			strcpy(ns_pathname, pathname);
+		} else {
+			sprintf(ns_pathname, "%u:%s", ns_init_pid, pathname);
+			//printk("[Wu Luo] the new pathname is %s\n", ns_pathname);
+			//memcpy((void*)pathname, (void*)ns_pathname, PATH_MAX + 11);
+			//kfree(ns_pathname);
+		}
+	}
+
 	if (action & IMA_MEASURE)
-		ima_store_measurement(iint, file, pathname,
+		ima_store_measurement(iint, file, ns_pathname,
 				      xattr_value, xattr_len);
 	if (action & IMA_APPRAISE_SUBMASK)
-		rc = ima_appraise_measurement(_func, iint, file, pathname,
+		rc = ima_appraise_measurement(_func, iint, file, ns_pathname,
 					      xattr_value, xattr_len);
 	if (action & IMA_AUDIT)
-		ima_audit_measurement(iint, pathname);
+		ima_audit_measurement(iint, ns_pathname);
 	kfree(pathbuf);
 out_digsig:
 	if ((mask & MAY_WRITE) && (iint->flags & IMA_DIGSIG))
 		rc = -EACCES;
 out:
+
+	if(ns_pathname) {
+		kfree(ns_pathname);
+	}
+
 	mutex_unlock(&inode->i_mutex);
 	kfree(xattr_value);
 	if ((rc && must_appraise) && (ima_appraise & IMA_APPRAISE_ENFORCE))

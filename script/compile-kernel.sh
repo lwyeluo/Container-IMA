@@ -33,3 +33,4 @@ if [ $? -ne 0 ]; then
 fi
 
 sed -i "/linux\t/s/$/& ima_tcb ima_template=\"ima\" ima_hash=\"sha1\"/g" /boot/grub/grub.cfg
+
