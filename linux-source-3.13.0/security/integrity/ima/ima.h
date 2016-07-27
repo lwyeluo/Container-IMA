@@ -88,6 +88,9 @@ struct ima_queue_entry {
 };
 extern struct list_head ima_measurements;	/* list of all measurements */
 
+/* list of all pid_namespace, used to find cpcr through proc_num */
+extern struct pid_namespace_list pid_ns_list;
+
 /* Internal IMA function definitions */
 int ima_init(void);
 void ima_cleanup(void);

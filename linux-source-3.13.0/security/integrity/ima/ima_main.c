@@ -28,8 +28,18 @@
 
 #include <linux/pid_namespace.h>
 #include <linux/string.h>
+#include <linux/types.h>
+#include <linux/list.h>
 
 #include "ima.h"
+
+/* list of all pid_namespace, used to find cpcr through proc_num */
+struct pid_namespace_list {
+	struct pid_namespace* ns;
+	struct list_head list;
+};
+
+struct pid_namespace_list pid_ns_list;
 
 int ima_initialized;
 
@@ -370,25 +380,47 @@ int ima_module_check(struct file *file)
  *
  * On success return 0.  On error, return -1.
  */
-int ima_create_namespace(struct pid_namespace* pid_ns)
-{
-	if(!pid_ns)
-		return -1;
+ int ima_create_namespace(struct pid_namespace* pid_ns)
+ {
+ 	struct pid_namespace_list *node;
+ 	struct list_head *pos;
+ 	struct pid_namespace_list *p;
 
-	printk("[Wu Luo] create a new namespace<proc_inum>[%u]!\n", pid_ns->proc_inum);
+ 	if(!pid_ns)
+ 		return -1;
 
-	if(pid_ns->cpcr) {
-		printk("[Wu Luo] cpcr does not exist, create it...\n");
-		memset(pid_ns->cpcr, 0, CPCR_DATA_SIZE);
-	} else {
-		printk("[Wu Luo] cpcr exists, reset it...\n");
-		pid_ns->cpcr = kmalloc(sizeof(struct cPCR), GFP_KERNEL);
-		if(!pid_ns->cpcr)
-			return -1;
-	}
+ 	printk("[Wu Luo] create a new namespace<proc_inum>[%u]!\n", pid_ns->proc_inum);
 
-	return 0;
-}
+ 	if(pid_ns->cpcr) {
+ 		printk("[Wu Luo] cpcr exists, reset it...\n");
+ 		memset(pid_ns->cpcr, 0, CPCR_DATA_SIZE);
+ 	} else {
+ 		printk("[Wu Luo] cpcr does not exist, create it...\n");
+ 		pid_ns->cpcr = kmalloc(sizeof(struct cPCR), GFP_KERNEL);
+ 		if(!pid_ns->cpcr)
+ 			return -1;
+ 		// append current list into pid_namespace_list
+ 		node = (struct pid_namespace_list*)kmalloc(sizeof(struct pid_namespace_list), GFP_KERNEL);
+ 		if(!node) {
+			printk("[Wu Luo] failed to kmalloc struct pid_namespace_list[%u]\n", sizeof(struct pid_namespace_list));
+ 			kfree(pid_ns->cpcr);
+ 			return 0;//-1;
+ 		}
+ 		node->ns = pid_ns;
+		if(!pid_ns_list.list.next) {
+			INIT_LIST_HEAD(&pid_ns_list.list);
+		}
+ 		list_add_tail(&node->list, &pid_ns_list.list);
+ 		printk("[Wu Luo] ns add into pid_ns_list\n");
+ 		printk("[Wu Luo] list test!");
+ 		list_for_each(pos, &pid_ns_list.list) {
+ 			p = list_entry(pos, struct pid_namespace_list, list);
+ 			printk("\t-> %u ", p->ns->proc_inum);
+ 		}
+ 	}
+
+ 	return 0;
+ }
 EXPORT_SYMBOL_GPL(ima_create_namespace);
 
 static int __init init_ima(void)

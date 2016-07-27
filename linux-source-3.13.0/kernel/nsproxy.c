@@ -161,11 +161,27 @@ int copy_namespaces(unsigned long flags, struct task_struct *tsk)
 	 */
 	if(tsk->nsproxy->pid_ns_for_children) {
 		if(tsk->nsproxy->pid_ns_for_children) {
-			ima_create_namespace(tsk->nsproxy->pid_ns_for_children);
+			if(ima_create_namespace(tsk->nsproxy->pid_ns_for_children) == 0) {
+				return 0;
+			}
 		}
 	}
 
-	return 0;
+	if (new_ns->pid_ns_for_children)
+		put_pid_ns(new_ns->pid_ns_for_children);
+
+	if (new_ns->ipc_ns)
+		put_ipc_ns(new_ns->ipc_ns);
+
+	if (new_ns->uts_ns)
+		put_uts_ns(new_ns->uts_ns);
+
+	if (new_ns->mnt_ns)
+		put_mnt_ns(new_ns->mnt_ns);
+
+	kmem_cache_free(nsproxy_cachep, new_ns);
+
+	return PTR_ERR(new_ns);
 }
 
 void free_nsproxy(struct nsproxy *ns)
