@@ -34,11 +34,6 @@
 #include "ima.h"
 
 /* list of all pid_namespace, used to find cpcr through proc_num */
-struct pid_namespace_list {
-	struct pid_namespace* ns;
-	struct list_head list;
-};
-
 struct pid_namespace_list pid_ns_list;
 
 int ima_initialized;
@@ -407,6 +402,9 @@ int ima_module_check(struct file *file)
  			return 0;//-1;
  		}
  		node->ns = pid_ns;
+
+		ima_create_measurement_log(node);
+
 		if(!pid_ns_list.list.next) {
 			INIT_LIST_HEAD(&pid_ns_list.list);
 		}

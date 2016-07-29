@@ -88,8 +88,21 @@ struct ima_queue_entry {
 };
 extern struct list_head ima_measurements;	/* list of all measurements */
 
+/* For Trusted Container Begin*/
+
 /* list of all pid_namespace, used to find cpcr through proc_num */
+struct pid_namespace_list {
+	struct pid_namespace* ns;
+	struct entry* measurement_log;
+	struct list_head list;
+};
+
 extern struct pid_namespace_list pid_ns_list;
+
+/* create a new measure_log for a new namespace */
+int ima_create_measurement_log(struct pid_namespace_list* node);
+
+/* For Trusted Container End*/
 
 /* Internal IMA function definitions */
 int ima_init(void);

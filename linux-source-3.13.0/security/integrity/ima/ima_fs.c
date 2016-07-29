@@ -23,6 +23,11 @@
 #include <linux/rcupdate.h>
 #include <linux/parser.h>
 
+#include <linux/pid_namespace.h>
+#include <linux/string.h>
+#include <linux/types.h>
+#include <linux/list.h>
+
 #include "ima.h"
 
 static int valid_policy = 1;
@@ -329,6 +334,116 @@ static const struct file_operations ima_measure_policy_ops = {
 	.release = ima_release_policy,
 	.llseek = generic_file_llseek,
 };
+
+/* For Trusted Container Begin */
+
+/* print in ascii */
+static int ima_ns_measurements_show(struct seq_file *m, void *v)
+{
+	/* the list never shrinks, so we don't need a lock here */
+	struct ima_queue_entry *qe = v;
+	struct ima_template_entry *e;
+	int i;
+
+	char *filename = NULL;
+
+	/* get entry */
+	e = qe->entry;
+	if (e == NULL)
+		return -1;
+
+	// just test the ima template, and the num_fields always equals 2, where the index 1 means filepath
+//	if(strcmp(qe->entry->template_desc->name, "ima") != 0) {
+//		return 0;
+//	}
+
+	if(e->template_desc->num_fields != 2) {
+		printk("[Wu Luo] ERROR: the num_field > 2, maybe the template not equals \"ima\"");
+		return 0;
+	}
+
+	filename = e->template_data[1].data;
+
+	// is this entry belongs to the current namespace?
+	//printk("[Wu Luo] data: %s <---> %s\n", filename, m->private);
+	if (strncmp(filename, m->private, strlen(m->private)) != 0)
+		return 0;
+
+	/* 1st: PCR used (config option) */
+	seq_printf(m, "%2d ", CONFIG_IMA_MEASURE_PCR_IDX);
+
+	/* 2nd: SHA1 template hash */
+	ima_print_digest(m, e->digest, TPM_DIGEST_SIZE);
+
+	/* 3th:  template name */
+	seq_printf(m, " %s", e->template_desc->name);
+
+	/* 4th:  template specific data */
+	for (i = 0; i < e->template_desc->num_fields; i++) {
+		seq_puts(m, " ");
+		if (e->template_data[i].len == 0)
+			continue;
+
+		e->template_desc->fields[i]->field_show(m, IMA_SHOW_ASCII,
+							&e->template_data[i]);
+	}
+	seq_puts(m, "\n");
+	return 0;
+}
+
+static const struct seq_operations ima_ns_measurements_seqops = {
+	.start = ima_measurements_start,
+	.next = ima_measurements_next,
+	.stop = ima_measurements_stop,
+	.show = ima_ns_measurements_show
+};
+
+static int ima_ns_measurements_open(struct inode *inode, struct file *file)
+{
+	struct seq_file *p = NULL;
+	unsigned int ret = -1;
+
+	ret = seq_open(file, &ima_ns_measurements_seqops);
+	if(ret != 0)
+		return ret;
+
+	p = file->private_data;
+
+	p->private = file->f_dentry->d_name.name;
+	//printk("[Wu Luo] allocate file's priavte data:[%s<-->%s]\n", p->private,
+		//	file->f_dentry->d_name.name);
+
+	return 0;
+}
+
+static const struct file_operations ima_ns_measurements_ops = {
+	.open = ima_ns_measurements_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = seq_release,
+};
+
+/* create a new measure_log for a new namespace
+ * If success, return 0, otherwise return -1
+ */
+int ima_create_measurement_log(struct pid_namespace_list* node) {
+	char file_name[20] = ""; //it will convert from a unsigned int
+
+	printk("[Wu Luo] enter ima_create_measurement_log\n");
+	if(!node->ns)
+		return -1;
+
+	sprintf(file_name, "%u", node->ns->proc_inum);
+
+	node->measurement_log = securityfs_create_file(file_name,
+			   S_IRUSR | S_IRGRP, ima_dir, NULL,
+			   &ima_ns_measurements_ops);
+	if (IS_ERR(node->measurement_log))
+			return -1;
+	return 0;
+}
+
+/* For Trusted Container End */
 
 int __init ima_fs_init(void)
 {
