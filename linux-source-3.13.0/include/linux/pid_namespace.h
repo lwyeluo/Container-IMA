@@ -23,7 +23,7 @@ struct bsd_acct_struct;
 #define CPCR_DATA_SIZE      20
 
 struct cPCR {
-    unsigned char* data[CPCR_DATA_SIZE];
+    unsigned char data[CPCR_DATA_SIZE];
 };
 
 struct pid_namespace {

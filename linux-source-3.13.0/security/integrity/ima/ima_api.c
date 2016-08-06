@@ -90,7 +90,8 @@ out:
  */
 int ima_store_template(struct ima_template_entry *entry,
 		       int violation, struct inode *inode,
-		       const unsigned char *filename)
+		       const unsigned char *filename,
+			   struct pid_namespace *ns)
 {
 	const char *op = "add_template_measure";
 	const char *audit_cause = "hashing_error";
@@ -117,7 +118,7 @@ int ima_store_template(struct ima_template_entry *entry,
 		}
 		memcpy(entry->digest, hash.hdr.digest, hash.hdr.length);
 	}
-	result = ima_add_template_entry(entry, violation, op, inode, filename);
+	result = ima_add_template_entry(entry, violation, op, inode, filename, ns);
 	return result;
 }
 
@@ -145,7 +146,7 @@ void ima_add_violation(struct file *file, const unsigned char *filename,
 		result = -ENOMEM;
 		goto err_out;
 	}
-	result = ima_store_template(entry, violation, inode, filename);
+	result = ima_store_template(entry, violation, inode, filename, NULL);
 	if (result < 0)
 		ima_free_template_entry(entry);
 err_out:
@@ -266,7 +267,7 @@ out:
 void ima_store_measurement(struct integrity_iint_cache *iint,
 			   struct file *file, const unsigned char *filename,
 			   struct evm_ima_xattr_data *xattr_value,
-			   int xattr_len)
+			   int xattr_len, struct pid_namespace *ns)
 {
 	const char *op = "add_template_measure";
 	const char *audit_cause = "ENOMEM";
@@ -286,7 +287,7 @@ void ima_store_measurement(struct integrity_iint_cache *iint,
 		return;
 	}
 
-	result = ima_store_template(entry, violation, inode, filename);
+	result = ima_store_template(entry, violation, inode, filename, ns);
 	if (!result || result == -EEXIST)
 		iint->flags |= IMA_MEASURED;
 	if (result < 0)

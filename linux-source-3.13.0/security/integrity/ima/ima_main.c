@@ -169,16 +169,6 @@ void ima_file_free(struct file *file)
 	ima_check_last_writer(iint, inode, file);
 }
 
-unsigned int get_namespace(void) {
-	if(current->nsproxy) {
-		struct pid_namespace *ns = current->nsproxy->pid_ns_for_children;
-		if(ns) {
-			return ns->proc_inum;
-		}
-	}
-	return -1;
-}
-
 static int process_measurement(struct file *file, const char *filename,
 			       int mask, int function)
 {
@@ -192,7 +182,7 @@ static int process_measurement(struct file *file, const char *filename,
 	struct evm_ima_xattr_data *xattr_value = NULL, **xattr_ptr = NULL;
 	int xattr_len = 0;
 
-	unsigned int ns_proc_num = -1;
+	struct pid_namespace *ns = NULL;
 
 	if (!ima_initialized || !S_ISREG(inode->i_mode))
 		return 0;
@@ -249,22 +239,24 @@ static int process_measurement(struct file *file, const char *filename,
 		pathname = (const char *)file->f_dentry->d_name.name;
 
 	//get the proc number of current pid's namespace
-	ns_proc_num = get_namespace();
 	ns_pathname = kmalloc(PATH_MAX + 11, GFP_KERNEL);
 	if (ns_pathname && pathname) {
-		if(ns_proc_num == -1) {
-			strcpy(ns_pathname, pathname);
-		} else {
-			sprintf(ns_pathname, "%u:%s", ns_proc_num, pathname);
-			//printk("[Wu Luo] the new pathname is %s\n", ns_pathname);
-			//memcpy((void*)pathname, (void*)ns_pathname, PATH_MAX + 11);
-			//kfree(ns_pathname);
+		if(current->nsproxy) {
+			ns = current->nsproxy->pid_ns_for_children;
+			if(ns) {
+				sprintf(ns_pathname, "%u:%s", ns->proc_inum, pathname);
+			} else {
+				strcpy(ns_pathname, pathname);
+			}
 		}
+	} else {
+		printk("[Wu Luo] ERROR: failed to kmalloc ns_pathname\n");
+		goto out;
 	}
 
 	if (action & IMA_MEASURE)
 		ima_store_measurement(iint, file, ns_pathname,
-				      xattr_value, xattr_len);
+				      xattr_value, xattr_len, ns);
 	if (action & IMA_APPRAISE_SUBMASK)
 		rc = ima_appraise_measurement(_func, iint, file, ns_pathname,
 					      xattr_value, xattr_len);
