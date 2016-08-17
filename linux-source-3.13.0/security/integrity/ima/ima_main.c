@@ -24,7 +24,9 @@
 #include <linux/slab.h>
 #include <linux/xattr.h>
 #include <linux/ima.h>
+#include <linux/crypto.h>
 #include <crypto/hash_info.h>
+#include <crypto/hash.h>
 
 #include <linux/pid_namespace.h>
 #include <linux/string.h>
@@ -254,9 +256,12 @@ static int process_measurement(struct file *file, const char *filename,
 		goto out;
 	}
 
-	if (action & IMA_MEASURE)
+	if (action & IMA_MEASURE) {
+		printk("[Wu Luo] prepared to enter ima_store_measurement[%s]..\n", ns_pathname);
 		ima_store_measurement(iint, file, ns_pathname,
 				      xattr_value, xattr_len, ns);
+		printk("[Wu Luo] exit ima_store_measurement ");
+	}
 	if (action & IMA_APPRAISE_SUBMASK)
 		rc = ima_appraise_measurement(_func, iint, file, ns_pathname,
 					      xattr_value, xattr_len);
@@ -271,6 +276,8 @@ out:
 	if(ns_pathname) {
 		kfree(ns_pathname);
 	}
+
+	printk(" exit %s\n", __FUNCTION__);
 
 	mutex_unlock(&inode->i_mutex);
 	kfree(xattr_value);
@@ -372,6 +379,7 @@ int ima_module_check(struct file *file)
  	struct pid_namespace_list *node;
  	struct list_head *pos;
  	struct pid_namespace_list *p;
+ 	int rc = -1;
 
  	if(!pid_ns)
  		return -1;
@@ -386,7 +394,15 @@ int ima_module_check(struct file *file)
  		pid_ns->cpcr = kmalloc(sizeof(struct cPCR), GFP_KERNEL);
  		if(!pid_ns->cpcr)
  			return -1;
- 		// append current list into pid_namespace_list
+
+ 		pid_ns->cpcr->tfm = crypto_alloc_shash("sha1", 0, CRYPTO_ALG_ASYNC);
+		if (IS_ERR(pid_ns->cpcr->tfm)) {
+			rc = PTR_ERR(pid_ns->cpcr->tfm);
+			printk("[Wu Luo] ERROR: Can not allocate tfm (reason: %d)\n",
+				   "sha1", rc);
+			return -1;
+		}
+
  		node = (struct pid_namespace_list*)kmalloc(sizeof(struct pid_namespace_list), GFP_KERNEL);
  		if(!node) {
 			printk("[Wu Luo] failed to kmalloc struct pid_namespace_list[%u]\n", sizeof(struct pid_namespace_list));

@@ -25,6 +25,7 @@
 #include <linux/proc_ns.h>
 #include <linux/file.h>
 #include <linux/syscalls.h>
+#include <crypto/hash.h>
 
 #include <linux/ima.h>
 
@@ -194,6 +195,16 @@ void free_nsproxy(struct nsproxy *ns)
 		put_ipc_ns(ns->ipc_ns);
 	if (ns->pid_ns_for_children)
 		put_pid_ns(ns->pid_ns_for_children);
+//	if (ns->pid_ns_for_children) {
+//		if(ns->pid_ns_for_children->cpcr) {
+//			if(!IS_ERR(ns->pid_ns_for_children->cpcr->tfm)) {
+//				printk("[Wu Luo] now we do not free the cpcr->tfm, may exists some warning\n");
+//				//crypto_free_shash(ns->pid_ns_for_children->cpcr->tfm);
+//			}
+//			kfree(ns->pid_ns_for_children->cpcr);
+//		}
+//		put_pid_ns(ns->pid_ns_for_children);
+//	}
 	put_net(ns->net_ns);
 	kmem_cache_free(nsproxy_cachep, ns);
 }

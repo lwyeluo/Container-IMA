@@ -97,52 +97,37 @@ static int ima_add_digest_entry(struct ima_template_entry *entry)
 
 /* extend to the related cPCR and set the iterative value into PCR */
 static int ima_cpcr_extend(const u8 *hash, struct pid_namespace *ns) {
-	struct crypto_shash *tfm;
-	struct shash_desc desc;
 
 	int i;
-	int rc;
+	int rc = 0;
 
-	struct cPCR* cpcr = ns->cpcr;
+	struct {
+		struct shash_desc shash;
+		char ctx[crypto_shash_descsize(ns->cpcr->tfm)];
+	} desc;
 
-	if(!cpcr)
-		return -1;
+	desc.shash.tfm = ns->cpcr->tfm;
+	desc.shash.flags = 0;
 
-	printk("[Wu Luo] enter ima_cpcr_extend sha1: %s\n", __FUNCTION__);
-
-	tfm = crypto_alloc_shash("sha1", 0, CRYPTO_ALG_ASYNC);
-	if (IS_ERR(tfm)) {
-		rc = PTR_ERR(tfm);
-		printk("[Wu Luo] ERROR: Can not allocate %s (reason: %d)\n",
-			   "sha1", rc);
-		return -1;
-	}
-
-	desc.tfm = tfm;
-	desc.flags = 0;
-
-	rc = crypto_shash_init(&desc);
+	rc = crypto_shash_init(&desc.shash);
 	if (rc != 0)
-		goto out;
+		return rc;
 
-	rc = crypto_shash_update(&desc, cpcr->data, sizeof(cpcr->data));
-	if (rc != 0)
-		goto out;
+	rc = crypto_shash_update(&desc.shash, ns->cpcr->data, sizeof(ns->cpcr->data));
 
-	rc = crypto_shash_update(&desc, hash, sizeof(hash));
+	rc = crypto_shash_update(&desc.shash, hash, sizeof(hash));
 	if (!rc)
-		crypto_shash_final(&desc, cpcr->data);
+		crypto_shash_final(&desc.shash, ns->cpcr->data);
 
 	printk("[Wu Luo] extend cpcr for ns[%u]:", ns->proc_inum);
 	for (i = 0; i < 20; i++) {
-		printk( "%02x\t", cpcr->data[i]);
+		printk( "%02x\t", ns->cpcr->data[i]);
+	}
+	printk("\n HASH: ");
+	for (i = 0; i < 20; i++) {
+		printk( "%02x\t", hash[i]);
 	}
 	printk("\n");
-
-out:
-	crypto_free_shash(tfm);
-
-	printk("[Wu Luo] crypto_free_shash succeed!");
 
 	return rc;
 }
@@ -177,8 +162,6 @@ int ima_add_template_entry(struct ima_template_entry *entry, int violation,
 	int audit_info = 1;
 	int result = 0, tpmresult = 0;
 
-	printk("[Wu Luo] enter %s\n", __FUNCTION__);
-
 	mutex_lock(&ima_extend_list_mutex);
 	if (!violation) {
 		memcpy(digest, entry->digest, sizeof digest);
@@ -200,30 +183,44 @@ int ima_add_template_entry(struct ima_template_entry *entry, int violation,
 		memset(digest, 0xff, sizeof digest);
 
 	// extend cPCR
-	printk("[Wu Luo] check ns exists?\n");
-	if(ns && ns->cpcr) {
+	printk("[Wu Luo] check ns exists %s?\n", filename);
+
+	if(ns && ns->cpcr && ns->cpcr->tfm) {
 		printk("[Wu Luo] prepared to extend cPCR\n");
-		tpmresult = ima_cpcr_extend(digest, ns);
-		if(tpmresult != 0) {
-			printk("[Wu Luo] failed to extend cPCR\n");
+		tpmresult = 0;
+		if(IS_ERR(ns->cpcr->tfm)) {
+			printk("[Wu Luo] cpcr->tfm not exists, alloc it...\n");
+			ns->cpcr->tfm = crypto_alloc_shash("sha1", 0, CRYPTO_ALG_ASYNC);
+			if (IS_ERR(ns->cpcr->tfm)) {
+				tpmresult = PTR_ERR(ns->cpcr->tfm);
+				printk("[Wu Luo] ERROR: Can not allocate %s (reason: %d)\n",
+					   "sha1", tpmresult);
+			}
+		}
+
+		if(tpmresult == 0) {
+			tpmresult = ima_cpcr_extend(digest, ns);
+			if(tpmresult != 0) {
+				printk("[Wu Luo] failed to extend cPCR\n");
+			}
 		}
 	}
 
 	printk("[Wu Luo] ima_cpcr_extend succeed");
 
 	tpmresult = ima_pcr_extend(digest);
-	printk("[Wu Luo] ima_pcr_extend finished");
+
 	if (tpmresult != 0) {
 		snprintf(tpm_audit_cause, AUDIT_CAUSE_LEN_MAX, "TPM_error(%d)",
 			 tpmresult);
 		audit_cause = tpm_audit_cause;
 		audit_info = 0;
 	}
-	printk("[Wu Luo] ima_pcr_extend succeed");
+
 out:
 	mutex_unlock(&ima_extend_list_mutex);
 	integrity_audit_msg(AUDIT_INTEGRITY_PCR, inode, filename,
 			    op, audit_cause, result, audit_info);
-	printk("[Wu Luo] exit %s\n", __FUNCTION__);
+	printk("[Wu Luo] exit %s <%d>\n", __FUNCTION__, result);
 	return result;
 }

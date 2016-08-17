@@ -8,6 +8,7 @@
 #include <linux/threads.h>
 #include <linux/nsproxy.h>
 #include <linux/kref.h>
+#include <linux/crypto.h>
 
 struct pidmap {
        atomic_t nr_free;
@@ -23,6 +24,7 @@ struct bsd_acct_struct;
 #define CPCR_DATA_SIZE      20
 
 struct cPCR {
+	struct crypto_shash *tfm;
     unsigned char data[CPCR_DATA_SIZE];
 };
 
