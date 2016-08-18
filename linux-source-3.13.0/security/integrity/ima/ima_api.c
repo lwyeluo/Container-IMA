@@ -118,9 +118,8 @@ int ima_store_template(struct ima_template_entry *entry,
 		}
 		memcpy(entry->digest, hash.hdr.digest, hash.hdr.length);
 	}
-	printk("[Wu Luo] enter %s ", __FUNCTION__);
+
 	result = ima_add_template_entry(entry, violation, op, inode, filename, ns);
-	printk("[Wu Luo] exit %s <%d> ", __FUNCTION__, result);
 	return result;
 }
 
@@ -278,8 +277,6 @@ void ima_store_measurement(struct integrity_iint_cache *iint,
 	struct inode *inode = file_inode(file);
 	struct ima_template_entry *entry;
 	int violation = 0;
-
-	printk("[Wu Luo] enter %s\n", __FUNCTION__);
 
 	if (iint->flags & IMA_MEASURED)
 		return;

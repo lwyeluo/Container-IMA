@@ -221,6 +221,5 @@ out:
 	mutex_unlock(&ima_extend_list_mutex);
 	integrity_audit_msg(AUDIT_INTEGRITY_PCR, inode, filename,
 			    op, audit_cause, result, audit_info);
-	printk("[Wu Luo] exit %s <%d>\n", __FUNCTION__, result);
 	return result;
 }

@@ -292,6 +292,7 @@ static struct dentry *ascii_runtime_measurements;
 static struct dentry *runtime_measurements_count;
 static struct dentry *violations;
 static struct dentry *ima_policy;
+static struct dentry *ima_cpcr;
 
 static atomic_t policy_opencount = ATOMIC_INIT(1);
 /*
@@ -443,6 +444,85 @@ int ima_create_measurement_log(struct pid_namespace_list* node) {
 	return 0;
 }
 
+/* for cpcr */
+
+static void *ima_cpcr_measurements_start(struct seq_file *m, loff_t *pos)
+{
+	loff_t l = *pos;
+	struct pid_namespace_list *qe;
+
+	/* we need a lock since pos could point beyond last element */
+	rcu_read_lock();
+
+	list_for_each_entry_rcu(qe, &pid_ns_list.list, list) {
+		if (!l--) {
+			rcu_read_unlock();
+			return qe;
+		}
+	}
+	rcu_read_unlock();
+	return NULL;
+}
+
+static void *ima_cpcr_measurements_next(struct seq_file *m, void *v, loff_t *pos)
+{
+	struct pid_namespace_list *qe = v;
+
+	/* lock protects when reading beyond last element
+	 * against concurrent list-extension
+	 */
+	rcu_read_lock();
+	qe = list_entry_rcu(qe->list.next, struct pid_namespace_list, list);
+	rcu_read_unlock();
+	(*pos)++;
+
+	return (&qe->list == &pid_ns_list.list) ? NULL : qe;
+}
+
+static void ima_cpcr_measurements_stop(struct seq_file *m, void *v)
+{
+}
+
+/* print in ascii */
+static int ima_cpcr_measurements_show(struct seq_file *m, void *v)
+{
+	/* the list never shrinks, so we don't need a lock here */
+	struct pid_namespace_list *qe = v;
+
+	int i;
+
+	if(qe && qe->ns && qe->ns->cpcr) {
+		seq_printf(m, "%u ", qe->ns->proc_inum);
+		for (i = 0; i < CPCR_DATA_SIZE; i ++) {
+			seq_printf(m, "%02x", qe->ns->cpcr->data[i]);
+		}
+		seq_puts(m, "\n");
+	} else
+		return -1;
+
+	return 0;
+}
+
+
+static const struct seq_operations ima_cpcr_measurements_seqops = {
+	.start = ima_cpcr_measurements_start,
+	.next = ima_cpcr_measurements_next,
+	.stop = ima_cpcr_measurements_stop,
+	.show = ima_cpcr_measurements_show
+};
+
+static int ima_cpcr_measurements_open(struct inode *inode, struct file *file)
+{
+	return seq_open(file, &ima_cpcr_measurements_seqops);
+}
+
+static const struct file_operations ima_cpcr_measurements_ops = {
+	.open = ima_cpcr_measurements_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = seq_release,
+};
+
 /* For Trusted Container End */
 
 int __init ima_fs_init(void)
@@ -485,6 +565,14 @@ int __init ima_fs_init(void)
 	if (IS_ERR(ima_policy))
 		goto out;
 
+	/* add cpcr */
+	ima_cpcr = securityfs_create_file("cpcr",
+			S_IRUSR | S_IRGRP, ima_dir, NULL,
+			&ima_cpcr_measurements_ops
+	);
+	if(IS_ERR(ima_cpcr))
+		goto out;
+
 	return 0;
 out:
 	securityfs_remove(violations);
@@ -493,5 +581,6 @@ out:
 	securityfs_remove(binary_runtime_measurements);
 	securityfs_remove(ima_dir);
 	securityfs_remove(ima_policy);
+	securityfs_remove(ima_cpcr);
 	return -1;
 }

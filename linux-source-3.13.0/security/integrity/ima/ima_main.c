@@ -257,10 +257,8 @@ static int process_measurement(struct file *file, const char *filename,
 	}
 
 	if (action & IMA_MEASURE) {
-		printk("[Wu Luo] prepared to enter ima_store_measurement[%s]..\n", ns_pathname);
 		ima_store_measurement(iint, file, ns_pathname,
 				      xattr_value, xattr_len, ns);
-		printk("[Wu Luo] exit ima_store_measurement ");
 	}
 	if (action & IMA_APPRAISE_SUBMASK)
 		rc = ima_appraise_measurement(_func, iint, file, ns_pathname,
