@@ -275,8 +275,6 @@ out:
 		kfree(ns_pathname);
 	}
 
-	printk(" exit %s\n", __FUNCTION__);
-
 	mutex_unlock(&inode->i_mutex);
 	kfree(xattr_value);
 	if ((rc && must_appraise) && (ima_appraise & IMA_APPRAISE_ENFORCE))
@@ -386,7 +384,7 @@ int ima_module_check(struct file *file)
 
  	if(pid_ns->cpcr) {
  		printk("[Wu Luo] cpcr exists, reset it...\n");
- 		memset(pid_ns->cpcr, 0, CPCR_DATA_SIZE);
+ 		memset(pid_ns->cpcr->data, 0x00, CPCR_DATA_SIZE);
  	} else {
  		printk("[Wu Luo] cpcr does not exist, create it...\n");
  		pid_ns->cpcr = kmalloc(sizeof(struct cPCR), GFP_KERNEL);
@@ -400,6 +398,8 @@ int ima_module_check(struct file *file)
 				   "sha1", rc);
 			return -1;
 		}
+
+		memset(pid_ns->cpcr->data, 0x00, CPCR_DATA_SIZE);
 
  		node = (struct pid_namespace_list*)kmalloc(sizeof(struct pid_namespace_list), GFP_KERNEL);
  		if(!node) {

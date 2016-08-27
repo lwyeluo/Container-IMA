@@ -113,13 +113,18 @@ static int ima_cpcr_extend(const u8 *hash, struct pid_namespace *ns) {
 	if (rc != 0)
 		return rc;
 
-	rc = crypto_shash_update(&desc.shash, ns->cpcr->data, sizeof(ns->cpcr->data));
+	printk("[Wu Luo] extend cpcr for ns[%u %u %u]:", ns->proc_inum, sizeof(ns->cpcr->data), sizeof(hash));
+	for (i = 0; i < 20; i++) {
+		printk( "%02x\t", ns->cpcr->data[i]);
+	}
 
-	rc = crypto_shash_update(&desc.shash, hash, sizeof(hash));
+	rc = crypto_shash_update(&desc.shash, ns->cpcr->data, CPCR_DATA_SIZE);
+
+	rc = crypto_shash_update(&desc.shash, hash, CPCR_DATA_SIZE);
 	if (!rc)
 		crypto_shash_final(&desc.shash, ns->cpcr->data);
 
-	printk("[Wu Luo] extend cpcr for ns[%u]:", ns->proc_inum);
+	printk("\n final cpcr: ");
 	for (i = 0; i < 20; i++) {
 		printk( "%02x\t", ns->cpcr->data[i]);
 	}
