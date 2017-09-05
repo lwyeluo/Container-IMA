@@ -102,6 +102,12 @@ int __init ima_init(void)
 	if (rc != 0)
 		return rc;
 
+	pr_info(">>> init cpcr_for_history\n");
+	rc = ima_init_cpcr_structures();
+	if (rc != 0)
+		return rc;
+
+	pr_info(">>> succeed init cpcr_for_history\n");
 	ima_add_boot_aggregate();	/* boot aggregate must be first entry */
 	ima_init_policy();
 

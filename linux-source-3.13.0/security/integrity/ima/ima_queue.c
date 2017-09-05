@@ -101,20 +101,10 @@ static struct pid_namespace_list *ima_lookup_namespace_entry(unsigned int proc_i
  * 	modified to add digest entry into corresponding measurement list
  */
 static int ima_add_digest_entry(struct ima_template_entry *entry,
-		struct pid_namespace *ns)
+		struct pid_namespace_list *list)
 {
 	struct ima_queue_entry *qe;
 	unsigned int key;
-
-	struct pid_namespace_list* list = NULL;
-
-	// locate the corresponding pid_ns_list
-	// if we do not get it, there is no pid_namespace_list and
-	//	we add digest entry into the default measurement list
-	if (ns) {
-		// get it
-		list = ima_lookup_namespace_entry(ns->proc_inum);
-	}
 
 	qe = kmalloc(sizeof(*qe), GFP_KERNEL);
 	if (qe == NULL) {
@@ -186,21 +176,88 @@ static int ima_cpcr_extend(const u8 *hash, struct pid_namespace *ns) {
 	return rc;
 }
 
-/* For Trusted Container End*/
-
-static int ima_pcr_extend(const u8 *hash)
-{
+static int ima_pcr_extend(int index, const u8 *hash) {
 	int result = 0;
 
 	if (!ima_used_chip)
 		return result;
 
-	result = tpm_pcr_extend(TPM_ANY_NUM, CONFIG_IMA_MEASURE_PCR_IDX, hash);
+	result = tpm_pcr_extend(TPM_ANY_NUM, index, hash);
 	if (result != 0)
 		pr_err("IMA: Error Communicating to TPM chip, result: %d\n",
 		       result);
 	return result;
 }
+
+static int ima_pcr_read(int index, u8 *value) {
+	int result = 0;
+
+	if (!ima_used_chip)
+		return result;
+
+	result = tpm_pcr_read(TPM_ANY_NUM, index, value);
+	if (result != 0)
+		pr_err("IMA: Error Communicating to TPM chip, result: %d\n",
+			   result);
+	return result;
+}
+
+/* extend to the related cPCR and set the iterative value into PCR */
+static int ima_cpcr_bind(void) {
+	u8 digest[TPM_DIGEST_SIZE];
+	struct pid_namespace_list *qe;
+
+	int i;
+	int rc = 0;
+
+	struct {
+		struct shash_desc shash;
+		char ctx[crypto_shash_descsize(cpcr_for_history.tfm)];
+	} desc;
+
+	desc.shash.tfm = cpcr_for_history.tfm;
+	desc.shash.flags = 0;
+
+	rc = crypto_shash_init(&desc.shash);
+	if (rc != 0)
+		return rc;
+
+	printk("[Wu Luo] prepared to bind cpcr to pcr\n");
+
+	rc = ima_pcr_read(CONFIG_IMA_CPCR_BIND_PCR_IDX, cpcr_for_history.data);
+	printk(">>> current pcr[%d] value is: ", CONFIG_IMA_CPCR_BIND_PCR_IDX);
+	for (i = 0; i < 20; i++) {
+		printk( "%02x\t", cpcr_for_history.data[i]);
+	}
+	printk("\n");
+
+	// collect all cPCRs
+	rcu_read_lock();
+	list_for_each_entry_rcu(qe, &pid_ns_list.list, list) {
+		rc = crypto_shash_update(&desc.shash, qe->ns->cpcr->data, CPCR_DATA_SIZE);
+	}
+	rcu_read_unlock();
+
+	crypto_shash_final(&desc.shash, digest);
+
+	printk("[Wu Luo] successfully calculate the digest of cPCRs\n");
+
+	// extend the digest into physical PCR
+	rc = ima_pcr_extend(CONFIG_IMA_CPCR_BIND_PCR_IDX, digest);
+
+	printk(">>> the digest of all cpcrs value is: ");
+	for (i = 0; i < 20; i++) {
+		printk( "%02x\t", digest[i]);
+	}
+	printk("\n");
+
+	printk("[Wu Luo] successfully bind all cPCRs into PCR %d\n",
+			CONFIG_IMA_CPCR_BIND_PCR_IDX);
+
+	return rc;
+}
+
+/* For Trusted Container End*/
 
 /* Add template entry to the measurement list and hash table,
  * and extend the pcr.
@@ -216,6 +273,8 @@ int ima_add_template_entry(struct ima_template_entry *entry, int violation,
 	int audit_info = 1;
 	int result = 0, tpmresult = 0;
 
+	struct pid_namespace_list* list = NULL;
+
 	mutex_lock(&ima_extend_list_mutex);
 	if (!violation) {
 		memcpy(digest, entry->digest, sizeof digest);
@@ -226,7 +285,15 @@ int ima_add_template_entry(struct ima_template_entry *entry, int violation,
 		}
 	}
 
-	result = ima_add_digest_entry(entry, ns);
+	// locate the corresponding pid_ns_list
+	// if we do not get it, there is no pid_namespace_list and
+	//	we add digest entry into the default measurement list
+	if (ns) {
+		// get it
+		list = ima_lookup_namespace_entry(ns->proc_inum);
+	}
+
+	result = ima_add_digest_entry(entry, list);
 	if (result < 0) {
 		audit_cause = "ENOMEM";
 		audit_info = 0;
@@ -237,28 +304,23 @@ int ima_add_template_entry(struct ima_template_entry *entry, int violation,
 		memset(digest, 0xff, sizeof digest);
 
 	// extend cPCR
-	if(ns && ns->cpcr && ns->cpcr->tfm) {
+	if (list && list->ns && list->ns->cpcr
+				&& list->ns->cpcr->tfm) {
 		printk("[Wu Luo] prepared to extend cPCR with %s\n", filename);
-		tpmresult = 0;
-		if(IS_ERR(ns->cpcr->tfm)) {
-			printk("[Wu Luo] cpcr->tfm not exists, alloc it...\n");
-			ns->cpcr->tfm = crypto_alloc_shash("sha1", 0, CRYPTO_ALG_ASYNC);
-			if (IS_ERR(ns->cpcr->tfm)) {
-				tpmresult = PTR_ERR(ns->cpcr->tfm);
-				printk("[Wu Luo] ERROR: Can not allocate %s (reason: %d)\n",
-					   "sha1", tpmresult);
-			}
-		}
 
-		if(tpmresult == 0) {
-			tpmresult = ima_cpcr_extend(digest, ns);
-			if(tpmresult != 0) {
-				printk("[Wu Luo] failed to extend cPCR\n");
-			}
+		// event occur in a namespace, so we extend this cPCR
+		//	and bind all cPCRs into a physical PCR
+		tpmresult = ima_cpcr_extend(digest, ns);
+		if(tpmresult != 0) {
+			printk("[Wu Luo] failed to extend cPCR\n");
 		}
+		tpmresult = ima_cpcr_bind();
+		if(tpmresult != 0) {
+			printk("[Wu Luo] failed to bind cPCR\n");
+		}
+	} else {
+		tpmresult = ima_pcr_extend(CONFIG_IMA_MEASURE_PCR_IDX, digest);
 	}
-
-	tpmresult = ima_pcr_extend(digest);
 
 	if (tpmresult != 0) {
 		snprintf(tpm_audit_cause, AUDIT_CAUSE_LEN_MAX, "TPM_error(%d)",

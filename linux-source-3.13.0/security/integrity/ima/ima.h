@@ -120,6 +120,13 @@ struct pid_namespace_hash_entry {
 /* create a new measure_log for a new namespace */
 int ima_create_measurement_log(struct pid_namespace_list* node);
 
+/* record the history value of physical PCR to bind all cPCRs into
+ *  a physical PCR, i.e. PCR12
+ */
+extern struct cPCR cpcr_for_history;
+
+int ima_init_cpcr_structures(void);
+
 /* For Trusted Container End*/
 
 /* Internal IMA function definitions */

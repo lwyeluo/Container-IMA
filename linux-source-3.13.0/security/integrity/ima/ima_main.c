@@ -38,6 +38,11 @@
 /* list of all pid_namespace, used to find cpcr through proc_num */
 struct pid_namespace_list pid_ns_list;
 
+/* record the history value of physical PCR to bind all cPCRs into
+ *  a physical PCR, i.e. PCR12
+ */
+struct cPCR cpcr_for_history;
+
 int ima_initialized;
 
 #ifdef CONFIG_IMA_APPRAISE
@@ -447,6 +452,22 @@ int ima_module_check(struct file *file)
  	return 0;
  }
 EXPORT_SYMBOL_GPL(ima_create_namespace);
+
+int __init ima_init_cpcr_structures(void) {
+	int rc = 0;
+
+	cpcr_for_history.tfm = crypto_alloc_shash("sha1", 0, CRYPTO_ALG_ASYNC);
+	if (IS_ERR(cpcr_for_history.tfm)) {
+		rc = PTR_ERR(cpcr_for_history.tfm);
+		printk("[Wu Luo] ERROR: Can not allocate tfm (reason: %d)\n",
+			   "sha1", rc);
+		return -1;
+	}
+
+	memset(cpcr_for_history.data, 0x00, CPCR_DATA_SIZE);
+
+	return 0;
+}
 
 static int __init init_ima(void)
 {
