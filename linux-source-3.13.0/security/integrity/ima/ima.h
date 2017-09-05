@@ -92,12 +92,30 @@ extern struct list_head ima_measurements;	/* list of all measurements */
 
 /* list of all pid_namespace, used to find cpcr through proc_num */
 struct pid_namespace_list {
-	struct pid_namespace* ns;
-	struct entry* measurement_log;
-	struct list_head list;
+	struct pid_namespace* ns; /* pid namespace */
+	struct entry* measurement_log; /* entry for securityfs */
+	/* all measures for this namespace, it is similar with ima_measurements */
+	struct list_head measurements;
+	struct list_head list; /* place to connect all pid namespaces */
 };
 
 extern struct pid_namespace_list pid_ns_list;
+
+// used to create a hash table to check whether a namespace belong to
+//	our pid_namespace_list
+struct ima_ns_h_table {
+	atomic_long_t len;	/* number of stored measurements in the list */
+	struct hlist_head queue[IMA_MEASURE_HTABLE_SIZE];
+};
+
+extern struct ima_ns_h_table ima_ns_htable;
+
+// a hash table to save all ns->proc_inum created by Trusted Container
+//	namespace hook
+struct pid_namespace_hash_entry {
+	struct hlist_node hnext;	/* place in hash collision list */
+	struct pid_namespace_list* ns_list; /* pid namespace */
+};
 
 /* create a new measure_log for a new namespace */
 int ima_create_measurement_log(struct pid_namespace_list* node);
@@ -144,6 +162,11 @@ extern struct ima_h_table ima_htable;
 static inline unsigned long ima_hash_key(u8 *digest)
 {
 	return hash_long(*digest, IMA_HASH_BITS);
+}
+
+static inline unsigned long ima_hash_ns_key(unsigned int proc_inum)
+{
+	return hash_long(proc_inum, IMA_HASH_BITS);
 }
 
 /* LIM API function definitions */

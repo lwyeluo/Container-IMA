@@ -243,17 +243,17 @@ static int process_measurement(struct file *file, const char *filename,
 	//get the proc number of current pid's namespace
 	ns_pathname = kmalloc(PATH_MAX + 11, GFP_KERNEL);
 	if (ns_pathname && pathname) {
-		if(current->nsproxy) {
+		if(current->nsproxy)
 			ns = current->nsproxy->pid_ns_for_children;
-			if(ns) {
-				sprintf(ns_pathname, "%u:%s", ns->proc_inum, pathname);
-			} else {
-				strcpy(ns_pathname, pathname);
-			}
-		}
 	} else {
 		printk("[Wu Luo] ERROR: failed to kmalloc ns_pathname\n");
 		goto out;
+	}
+
+	if(ns) {
+		sprintf(ns_pathname, "%u:%s", ns->proc_inum, pathname);
+	} else {
+		strcpy(ns_pathname, pathname);
 	}
 
 	if (action & IMA_MEASURE) {
@@ -271,9 +271,9 @@ out_digsig:
 		rc = -EACCES;
 out:
 
-	if(ns_pathname) {
-		kfree(ns_pathname);
-	}
+//	if(ns_pathname) {
+//		kfree(ns_pathname);
+//	}
 
 	mutex_unlock(&inode->i_mutex);
 	kfree(xattr_value);
@@ -375,6 +375,9 @@ int ima_module_check(struct file *file)
  	struct pid_namespace_list *node;
  	struct list_head *pos;
  	struct pid_namespace_list *p;
+ 	struct pid_namespace_hash_entry *entry;
+
+ 	unsigned long key;
  	int rc = -1;
 
  	if(!pid_ns)
@@ -409,6 +412,9 @@ int ima_module_check(struct file *file)
  		}
  		node->ns = pid_ns;
 
+ 		// record all measurement events in this namespace
+ 		INIT_LIST_HEAD(&node->measurements);
+
 		ima_create_measurement_log(node);
 
 		if(!pid_ns_list.list.next) {
@@ -421,6 +427,21 @@ int ima_module_check(struct file *file)
  			p = list_entry(pos, struct pid_namespace_list, list);
  			printk("\t-> %u ", p->ns->proc_inum);
  		}
+
+ 		// Update the hash table
+ 		atomic_long_inc(&ima_ns_htable.len);
+ 		key = ima_hash_ns_key(node->ns->proc_inum);
+
+ 		entry = kmalloc(sizeof(*entry), GFP_KERNEL);
+ 		if (entry == NULL) {
+ 			printk("[Wu Luo] failed to kmalloc struct pid_namespace_hash_entry[%u]\n",
+ 					sizeof(struct pid_namespace_hash_entry));
+			kfree(pid_ns->cpcr);
+			return 0;//-1;
+ 		}
+ 		entry->ns_list = node;
+ 		INIT_HLIST_NODE(&entry->hnext);
+ 		hlist_add_head_rcu(&entry->hnext, &ima_ns_htable.queue[key]);
  	}
 
  	return 0;

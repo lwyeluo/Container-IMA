@@ -156,18 +156,6 @@ int copy_namespaces(unsigned long flags, struct task_struct *tsk)
 
 	tsk->nsproxy = new_ns;
 
-	/*
-	 * if a new namespace created, we will reset the current cPCR,
-	 * this is a hook, whose implementation is in ima_main.c
-	 */
-	if(tsk->nsproxy->pid_ns_for_children) {
-		if(tsk->nsproxy->pid_ns_for_children) {
-			if(ima_create_namespace(tsk->nsproxy->pid_ns_for_children) == 0) {
-				return 0;
-			}
-		}
-	}
-
 	if (new_ns->pid_ns_for_children)
 		put_pid_ns(new_ns->pid_ns_for_children);
 
@@ -232,6 +220,18 @@ int unshare_nsproxy_namespaces(unsigned long unshare_flags,
 	if (IS_ERR(*new_nsp)) {
 		err = PTR_ERR(*new_nsp);
 		goto out;
+	}
+
+	/*
+	 * if a new namespace created, we will reset the current cPCR,
+	 * this is a hook, whose implementation is in ima_main.c
+	 */
+	printk("[Wu Luo][DEBUG] enter into Namespace Register Procedure\n");
+	if((*new_nsp)->pid_ns_for_children) {
+		printk("[Wu Luo][DEBUG] prepare to create namespace\n");
+		if(ima_create_namespace((*new_nsp)->pid_ns_for_children) == 0) {
+			return 0;
+		}
 	}
 
 out:

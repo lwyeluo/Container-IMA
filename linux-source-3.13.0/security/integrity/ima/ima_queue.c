@@ -41,6 +41,11 @@ struct ima_h_table ima_htable = {
 	.queue[0 ... IMA_MEASURE_HTABLE_SIZE - 1] = HLIST_HEAD_INIT
 };
 
+struct ima_ns_h_table ima_ns_htable = {
+	.len = ATOMIC_LONG_INIT(0),
+	.queue[0 ... IMA_MEASURE_HTABLE_SIZE - 1] = HLIST_HEAD_INIT
+};
+
 /* mutex protects atomicity of extending measurement list
  * and extending the TPM PCR aggregate. Since tpm_extend can take
  * long (and the tpm driver uses a mutex), we can't use the spinlock.
@@ -67,15 +72,49 @@ static struct ima_queue_entry *ima_lookup_digest_entry(u8 *digest_value)
 	return ret;
 }
 
+/* lookup up the digest value in the hash table, and return the entry */
+static struct pid_namespace_list *ima_lookup_namespace_entry(unsigned int proc_inum)
+{
+	struct pid_namespace_hash_entry *qe = NULL;
+	struct pid_namespace_list *ret = NULL;
+	unsigned int key;
+	int rc;
+
+	key = ima_hash_ns_key(proc_inum);
+	rcu_read_lock();
+	hlist_for_each_entry_rcu(qe, &ima_ns_htable.queue[key], hnext) {
+		if (qe->ns_list->ns->proc_inum == proc_inum) {
+			ret = qe->ns_list;
+			break;
+		}
+	}
+	rcu_read_unlock();
+	return ret;
+}
+
 /* ima_add_template_entry helper function:
  * - Add template entry to measurement list and hash table.
  *
  * (Called with ima_extend_list_mutex held.)
+ *
+ * Updated by Wu Luo:
+ * 	modified to add digest entry into corresponding measurement list
  */
-static int ima_add_digest_entry(struct ima_template_entry *entry)
+static int ima_add_digest_entry(struct ima_template_entry *entry,
+		struct pid_namespace *ns)
 {
 	struct ima_queue_entry *qe;
 	unsigned int key;
+
+	struct pid_namespace_list* list = NULL;
+
+	// locate the corresponding pid_ns_list
+	// if we do not get it, there is no pid_namespace_list and
+	//	we add digest entry into the default measurement list
+	if (ns) {
+		// get it
+		list = ima_lookup_namespace_entry(ns->proc_inum);
+	}
 
 	qe = kmalloc(sizeof(*qe), GFP_KERNEL);
 	if (qe == NULL) {
@@ -85,11 +124,20 @@ static int ima_add_digest_entry(struct ima_template_entry *entry)
 	qe->entry = entry;
 
 	INIT_LIST_HEAD(&qe->later);
-	list_add_tail_rcu(&qe->later, &ima_measurements);
+
+	if (list && list->ns && list->ns->cpcr
+			&& list->ns->cpcr->tfm) {
+		printk("[Wu Luo][DEBUG] a ME added into namespace<%u>\n",
+				list->ns->proc_inum);
+		list_add_tail_rcu(&qe->later, &list->measurements);
+	} else {
+		list_add_tail_rcu(&qe->later, &ima_measurements);
+	}
 
 	atomic_long_inc(&ima_htable.len);
 	key = ima_hash_key(entry->digest);
 	hlist_add_head_rcu(&qe->hnext, &ima_htable.queue[key]);
+
 	return 0;
 }
 
@@ -114,9 +162,10 @@ static int ima_cpcr_extend(const u8 *hash, struct pid_namespace *ns) {
 		return rc;
 
 	printk("[Wu Luo] extend cpcr for ns[%u %u %u]:", ns->proc_inum, sizeof(ns->cpcr->data), sizeof(hash));
-	for (i = 0; i < 20; i++) {
-		printk( "%02x\t", ns->cpcr->data[i]);
-	}
+//	for (i = 0; i < 20; i++) {
+//		printk( "%02x\t", ns->cpcr->data[i]);
+//	}
+	printk("\n");
 
 	rc = crypto_shash_update(&desc.shash, ns->cpcr->data, CPCR_DATA_SIZE);
 
@@ -124,15 +173,15 @@ static int ima_cpcr_extend(const u8 *hash, struct pid_namespace *ns) {
 	if (!rc)
 		crypto_shash_final(&desc.shash, ns->cpcr->data);
 
-	printk("\n final cpcr: ");
-	for (i = 0; i < 20; i++) {
-		printk( "%02x\t", ns->cpcr->data[i]);
-	}
-	printk("\n HASH: ");
-	for (i = 0; i < 20; i++) {
-		printk( "%02x\t", hash[i]);
-	}
-	printk("\n");
+//	printk("\n final cpcr: ");
+//	for (i = 0; i < 20; i++) {
+//		printk( "%02x\t", ns->cpcr->data[i]);
+//	}
+//	printk("\n HASH: ");
+//	for (i = 0; i < 20; i++) {
+//		printk( "%02x\t", hash[i]);
+//	}
+//	printk("\n");
 
 	return rc;
 }
@@ -177,7 +226,7 @@ int ima_add_template_entry(struct ima_template_entry *entry, int violation,
 		}
 	}
 
-	result = ima_add_digest_entry(entry);
+	result = ima_add_digest_entry(entry, ns);
 	if (result < 0) {
 		audit_cause = "ENOMEM";
 		audit_info = 0;
@@ -188,10 +237,8 @@ int ima_add_template_entry(struct ima_template_entry *entry, int violation,
 		memset(digest, 0xff, sizeof digest);
 
 	// extend cPCR
-	printk("[Wu Luo] check ns exists %s?\n", filename);
-
 	if(ns && ns->cpcr && ns->cpcr->tfm) {
-		printk("[Wu Luo] prepared to extend cPCR\n");
+		printk("[Wu Luo] prepared to extend cPCR with %s\n", filename);
 		tpmresult = 0;
 		if(IS_ERR(ns->cpcr->tfm)) {
 			printk("[Wu Luo] cpcr->tfm not exists, alloc it...\n");
@@ -210,8 +257,6 @@ int ima_add_template_entry(struct ima_template_entry *entry, int violation,
 			}
 		}
 	}
-
-	printk("[Wu Luo] ima_cpcr_extend succeed");
 
 	tpmresult = ima_pcr_extend(digest);
 
