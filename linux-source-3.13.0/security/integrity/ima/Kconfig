@@ -48,6 +48,26 @@ config IMA_CPCR_BIND_PCR_IDX
 	  IMA_CPCR_BIND_PCR_IDX determines the TPM PCR register index
 	  that IMA uses to protect the integrity of all cPCRs
 	  (see Trusted Container). If unsure, use the default 12.
+	  
+config IMA_KERNEL_MODULE_PCR_IDX
+	int
+	depends on IMA
+	range 8 14
+	default 11
+	help
+	  IMA_KERNEL_MODULE_PCR_IDX determines the TPM PCR register index
+	  that IMA uses to record all events related to load kernel modules
+	  (see Trusted Container). If unsure, use the default 11.
+	  
+config IMA_CPCR_BIND_PCR_IDX
+	int
+	depends on IMA
+	range 8 14
+	default 12
+	help
+	  IMA_CPCR_BIND_PCR_IDX determines the TPM PCR register index
+	  that IMA uses to protect the integrity of all cPCRs
+	  (see Trusted Container). If unsure, use the default 12.
 
 config IMA_LSM_RULES
 	bool

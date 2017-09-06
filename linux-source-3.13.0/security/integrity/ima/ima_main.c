@@ -263,7 +263,7 @@ static int process_measurement(struct file *file, const char *filename,
 
 	if (action & IMA_MEASURE) {
 		ima_store_measurement(iint, file, ns_pathname,
-				      xattr_value, xattr_len, ns);
+				      xattr_value, xattr_len, ns, function);
 	}
 	if (action & IMA_APPRAISE_SUBMASK)
 		rc = ima_appraise_measurement(_func, iint, file, ns_pathname,

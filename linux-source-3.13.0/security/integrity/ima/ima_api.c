@@ -91,7 +91,8 @@ out:
 int ima_store_template(struct ima_template_entry *entry,
 		       int violation, struct inode *inode,
 		       const unsigned char *filename,
-			   struct pid_namespace *ns)
+			   struct pid_namespace *ns,
+			   int function)
 {
 	const char *op = "add_template_measure";
 	const char *audit_cause = "hashing_error";
@@ -119,7 +120,8 @@ int ima_store_template(struct ima_template_entry *entry,
 		memcpy(entry->digest, hash.hdr.digest, hash.hdr.length);
 	}
 
-	result = ima_add_template_entry(entry, violation, op, inode, filename, ns);
+	result = ima_add_template_entry(entry, violation, op, inode,
+			filename, ns, function);
 	return result;
 }
 
@@ -147,7 +149,7 @@ void ima_add_violation(struct file *file, const unsigned char *filename,
 		result = -ENOMEM;
 		goto err_out;
 	}
-	result = ima_store_template(entry, violation, inode, filename, NULL);
+	result = ima_store_template(entry, violation, inode, filename, NULL, FILE_CHECK);
 	printk("[Wu Luo] exit ima_store_template in %s <%d> ", __FUNCTION__, result);
 	if (result < 0)
 		ima_free_template_entry(entry);
@@ -269,7 +271,8 @@ out:
 void ima_store_measurement(struct integrity_iint_cache *iint,
 			   struct file *file, const unsigned char *filename,
 			   struct evm_ima_xattr_data *xattr_value,
-			   int xattr_len, struct pid_namespace *ns)
+			   int xattr_len, struct pid_namespace *ns,
+			   int function)
 {
 	const char *op = "add_template_measure";
 	const char *audit_cause = "ENOMEM";
@@ -289,7 +292,7 @@ void ima_store_measurement(struct integrity_iint_cache *iint,
 		return;
 	}
 
-	result = ima_store_template(entry, violation, inode, filename, ns);
+	result = ima_store_template(entry, violation, inode, filename, ns, function);
 	if (!result || result == -EEXIST)
 		iint->flags |= IMA_MEASURED;
 	if (result < 0)

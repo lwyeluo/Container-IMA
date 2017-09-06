@@ -31,6 +31,14 @@
 
 #include "ima.h"
 
+// modified the struct of ima_measurements, for that
+//	we have multiple measurement lists, e.g. PCR10 for the default IMA,
+//	PCR11 for kernel modules...
+struct ima_mesurement_list {
+	int pcr_idx;
+	struct list_head* measurements;
+};
+
 static int valid_policy = 1;
 #define TMPBUFLEN 12
 static ssize_t ima_show_htable_value(char __user *buf, size_t count,
@@ -74,9 +82,15 @@ static void *ima_measurements_start(struct seq_file *m, loff_t *pos)
 	loff_t l = *pos;
 	struct ima_queue_entry *qe;
 
+	// point to the corresponding measument list
+	struct ima_mesurement_list* node = m->private;
+
+	if (node == NULL)
+		return NULL;
+
 	/* we need a lock since pos could point beyond last element */
 	rcu_read_lock();
-	list_for_each_entry_rcu(qe, &ima_measurements, later) {
+	list_for_each_entry_rcu(qe, node->measurements, later) {
 		if (!l--) {
 			rcu_read_unlock();
 			return qe;
@@ -90,6 +104,11 @@ static void *ima_measurements_next(struct seq_file *m, void *v, loff_t *pos)
 {
 	struct ima_queue_entry *qe = v;
 
+	// point to the corresponding measument list
+	struct ima_mesurement_list* node = m->private;
+	if (node == NULL)
+		return NULL;
+
 	/* lock protects when reading beyond last element
 	 * against concurrent list-extension
 	 */
@@ -98,7 +117,7 @@ static void *ima_measurements_next(struct seq_file *m, void *v, loff_t *pos)
 	rcu_read_unlock();
 	(*pos)++;
 
-	return (&qe->later == &ima_measurements) ? NULL : qe;
+	return (&qe->later == node->measurements) ? NULL : qe;
 }
 
 static void ima_measurements_stop(struct seq_file *m, void *v)
@@ -128,6 +147,13 @@ static int ima_measurements_show(struct seq_file *m, void *v)
 	u32 pcr = CONFIG_IMA_MEASURE_PCR_IDX;
 	bool is_ima_template = false;
 	int i;
+
+	// point to the corresponding measument list
+	struct ima_mesurement_list* node = m->private;
+	if (node == NULL)
+		return -1;
+
+	pcr = node->pcr_idx;
 
 	/* get entry */
 	e = qe->entry;
@@ -182,7 +208,24 @@ static const struct seq_operations ima_measurments_seqops = {
 
 static int ima_measurements_open(struct inode *inode, struct file *file)
 {
-	return seq_open(file, &ima_measurments_seqops);
+	struct seq_file *p = NULL;
+	struct ima_measurement_list* node = inode->i_private;
+	int ret = -1;
+
+	if (!node) {
+		printk("[Wu Luo][ERROR] do not refer to a ima_measurement_list\n");
+		return -1;
+	}
+
+	ret = seq_open(file, &ima_measurments_seqops);
+	if (ret != 0)
+		return ret;
+
+	p = file->private_data;
+
+	p->private = node;
+
+	return 0;
 }
 
 static const struct file_operations ima_measurements_ops = {
@@ -208,13 +251,19 @@ static int ima_ascii_measurements_show(struct seq_file *m, void *v)
 	struct ima_template_entry *e;
 	int i;
 
+	// point to the corresponding measument list
+	struct ima_mesurement_list* node = m->private;
+
+	if (node == NULL)
+		return -1;
+
 	/* get entry */
 	e = qe->entry;
 	if (e == NULL)
 		return -1;
 
 	/* 1st: PCR used (config option) */
-	seq_printf(m, "%2d ", CONFIG_IMA_MEASURE_PCR_IDX);
+	seq_printf(m, "%2d ", node->pcr_idx);
 
 	/* 2nd: SHA1 template hash */
 	ima_print_digest(m, e->digest, TPM_DIGEST_SIZE);
@@ -244,7 +293,24 @@ static const struct seq_operations ima_ascii_measurements_seqops = {
 
 static int ima_ascii_measurements_open(struct inode *inode, struct file *file)
 {
-	return seq_open(file, &ima_ascii_measurements_seqops);
+	struct seq_file *p = NULL;
+	struct ima_measurement_list* node = inode->i_private;
+	int ret = -1;
+
+	if (!node) {
+		printk("[Wu Luo][ERROR] do not refer to a ima_measurement_list\n");
+		return -1;
+	}
+
+	ret = seq_open(file, &ima_ascii_measurements_seqops);
+	if(ret != 0)
+		return ret;
+
+	p = file->private_data;
+
+	p->private = node;
+
+	return 0;
 }
 
 static const struct file_operations ima_ascii_measurements_ops = {
@@ -289,6 +355,7 @@ out:
 
 static struct dentry *ima_dir;
 static struct dentry *binary_runtime_measurements;
+static struct dentry *kernel_module_measurements;
 static struct dentry *ascii_runtime_measurements;
 static struct dentry *runtime_measurements_count;
 static struct dentry *violations;
@@ -387,17 +454,58 @@ static void *ima_ns_measurements_next(struct seq_file *m, void *v, loff_t *pos)
 	return (&qe->later == &node->measurements) ? NULL : qe;
 }
 
+/* print in ascii */
+static int ima_ns_measurements_show(struct seq_file *m, void *v)
+{
+	/* the list never shrinks, so we don't need a lock here */
+	struct ima_queue_entry *qe = v;
+	struct ima_template_entry *e;
+	int i;
+
+	// point to all measument list in this namespace
+	struct pid_namespace_list* node = m->private;
+
+	if (node == NULL)
+		return -1;
+
+	/* get entry */
+	e = qe->entry;
+	if (e == NULL)
+		return -1;
+
+	/* 1st: PCR used (config option) */
+	seq_printf(m, "%u ", node->ns->proc_inum);
+
+	/* 2nd: SHA1 template hash */
+	ima_print_digest(m, e->digest, TPM_DIGEST_SIZE);
+
+	/* 3th:  template name */
+	seq_printf(m, " %s", e->template_desc->name);
+
+	/* 4th:  template specific data */
+	for (i = 0; i < e->template_desc->num_fields; i++) {
+		seq_puts(m, " ");
+		if (e->template_data[i].len == 0)
+			continue;
+
+		e->template_desc->fields[i]->field_show(m, IMA_SHOW_ASCII,
+							&e->template_data[i]);
+	}
+	seq_puts(m, "\n");
+	return 0;
+}
+
 static const struct seq_operations ima_ns_measurements_seqops = {
 	.start = ima_ns_measurements_start,
 	.next = ima_ns_measurements_next,
 	.stop = ima_measurements_stop,
-	.show = ima_ascii_measurements_show
+	.show = ima_ns_measurements_show
 };
 
 static int ima_ns_measurements_open(struct inode *inode, struct file *file)
 {
 	struct seq_file *p = NULL;
-	unsigned int ret = -1;
+	int ret = -1;
 
 	struct pid_namespace_list* node = inode->i_private;
 
@@ -524,22 +632,48 @@ static const struct file_operations ima_cpcr_measurements_ops = {
 
 int __init ima_fs_init(void)
 {
+	struct ima_mesurement_list* ima_kernel_ml = NULL;
+	struct ima_mesurement_list* ima_default_ml = NULL;
+
 	ima_dir = securityfs_create_dir("ima", NULL);
 	if (IS_ERR(ima_dir))
 		return -1;
 
+	ima_default_ml = kmalloc(sizeof(struct ima_mesurement_list), GFP_KERNEL);
+	if(!ima_default_ml) {
+		printk("[Wu Luo] failed to kmalloc struct ima_mesurement_list\n");
+		goto out;
+	}
+	ima_default_ml->pcr_idx = CONFIG_IMA_MEASURE_PCR_IDX;
+	ima_default_ml->measurements = &ima_measurements;
+
 	binary_runtime_measurements =
 	    securityfs_create_file("binary_runtime_measurements",
-				   S_IRUSR | S_IRGRP, ima_dir, NULL,
+				   S_IRUSR | S_IRGRP, ima_dir, ima_default_ml,
 				   &ima_measurements_ops);
 	if (IS_ERR(binary_runtime_measurements))
 		goto out;
 
 	ascii_runtime_measurements =
 	    securityfs_create_file("ascii_runtime_measurements",
-				   S_IRUSR | S_IRGRP, ima_dir, NULL,
+				   S_IRUSR | S_IRGRP, ima_dir, ima_default_ml,
 				   &ima_ascii_measurements_ops);
 	if (IS_ERR(ascii_runtime_measurements))
+		goto out;
+
+	ima_kernel_ml = kmalloc(sizeof(struct ima_mesurement_list), GFP_KERNEL);
+	if(!ima_kernel_ml) {
+		printk("[Wu Luo] failed to kmalloc struct ima_mesurement_list\n");
+		goto out;
+	}
+	ima_kernel_ml->pcr_idx = CONFIG_IMA_KERNEL_MODULE_PCR_IDX;
+	ima_kernel_ml->measurements = &ima_kernel_measurements;
+
+	kernel_module_measurements =
+		securityfs_create_file("kernel_module_measurements",
+				   S_IRUSR | S_IRGRP, ima_dir, ima_kernel_ml,
+				   &ima_ascii_measurements_ops);
+	if (IS_ERR(kernel_module_measurements))
 		goto out;
 
 	runtime_measurements_count =

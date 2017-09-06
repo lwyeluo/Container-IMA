@@ -32,7 +32,10 @@
 
 #define AUDIT_CAUSE_LEN_MAX 32
 
-LIST_HEAD(ima_measurements);	/* list of all measurements */
+/* list of all measurements */
+LIST_HEAD(ima_measurements);
+/* list of all kernel modules */
+LIST_HEAD(ima_kernel_measurements);
 
 /* key: inode (before secure-hashing a file) */
 struct ima_h_table ima_htable = {
@@ -101,9 +104,9 @@ static struct pid_namespace_list *ima_lookup_namespace_entry(unsigned int proc_i
  * 	modified to add digest entry into corresponding measurement list
  */
 static int ima_add_digest_entry(struct ima_template_entry *entry,
-		struct pid_namespace_list *list)
+		struct pid_namespace_list *list, int function)
 {
-	struct ima_queue_entry *qe;
+	struct ima_queue_entry *qe, *qe_kernel;
 	unsigned int key;
 
 	qe = kmalloc(sizeof(*qe), GFP_KERNEL);
@@ -122,6 +125,20 @@ static int ima_add_digest_entry(struct ima_template_entry *entry,
 		list_add_tail_rcu(&qe->later, &list->measurements);
 	} else {
 		list_add_tail_rcu(&qe->later, &ima_measurements);
+	}
+
+	if (function == MODULE_CHECK) {
+		// if there is a kernel module, we add it into ima_kernel_measurements
+		qe_kernel = kmalloc(sizeof(*qe_kernel), GFP_KERNEL);
+		if (qe_kernel == NULL) {
+			pr_err("IMA: OUT OF MEMORY ERROR creating queue entry.\n");
+			return -ENOMEM;
+		}
+		qe_kernel->entry = entry;
+
+		INIT_LIST_HEAD(&qe_kernel->later);
+
+		list_add_tail_rcu(&qe_kernel->later, &ima_kernel_measurements);
 	}
 
 	atomic_long_inc(&ima_htable.len);
@@ -265,7 +282,8 @@ static int ima_cpcr_bind(void) {
 int ima_add_template_entry(struct ima_template_entry *entry, int violation,
 			   const char *op, struct inode *inode,
 			   const unsigned char *filename,
-			   struct pid_namespace *ns)
+			   struct pid_namespace *ns,
+			   int function)
 {
 	u8 digest[TPM_DIGEST_SIZE];
 	const char *audit_cause = "hash_added";
@@ -293,7 +311,7 @@ int ima_add_template_entry(struct ima_template_entry *entry, int violation,
 		list = ima_lookup_namespace_entry(ns->proc_inum);
 	}
 
-	result = ima_add_digest_entry(entry, list);
+	result = ima_add_digest_entry(entry, list, function);
 	if (result < 0) {
 		audit_cause = "ENOMEM";
 		audit_info = 0;
@@ -302,6 +320,11 @@ int ima_add_template_entry(struct ima_template_entry *entry, int violation,
 
 	if (violation)		/* invalidate pcr */
 		memset(digest, 0xff, sizeof digest);
+
+	// if there is a kernel module, we should extend it right now
+	if (function == MODULE_CHECK) {
+		tpmresult = ima_pcr_extend(CONFIG_IMA_KERNEL_MODULE_PCR_IDX, digest);
+	}
 
 	// extend cPCR
 	if (list && list->ns && list->ns->cpcr
