@@ -1,1 +1,0 @@
-cmd_/root/gitrep/Trusted-Container/test/kernel/hello.ko := ld -r -m elf_x86_64 -T /usr/src/linux-source-3.13.0/linux-source-3.13.0/scripts/module-common.lds --build-id  -o /root/gitrep/Trusted-Container/test/kernel/hello.ko /root/gitrep/Trusted-Container/test/kernel/hello.o /root/gitrep/Trusted-Container/test/kernel/hello.mod.o

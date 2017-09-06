@@ -123,6 +123,8 @@ struct pid_namespace_hash_entry {
 
 /* create a new measure_log for a new namespace */
 int ima_create_measurement_log(struct pid_namespace_list* node);
+/* lookup up the digest value in the hash table, and return the entry */
+struct pid_namespace_list *ima_lookup_namespace_entry(unsigned int proc_inum);
 
 /* record the history value of physical PCR to bind all cPCRs into
  *  a physical PCR, i.e. PCR12

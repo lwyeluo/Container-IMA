@@ -32,6 +32,7 @@
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/list.h>
+#include <linux/fdtable.h>
 
 #include "ima.h"
 
@@ -367,6 +368,89 @@ int ima_module_check(struct file *file)
 	return process_measurement(file, NULL, MAY_EXEC, MODULE_CHECK);
 }
 
+int ima_add_ns_task(struct file* file, char* filename,
+		struct pid_namespace* pid_ns)
+{
+	struct ima_template_entry *entry;
+	struct integrity_iint_cache tmp_iint, *iint = &tmp_iint;
+
+	int result = -ENOMEM;
+	int violation = 0;
+	struct {
+		struct ima_digest_data hdr;
+		char digest[TPM_DIGEST_SIZE];
+	} hash;
+
+	memset(iint, 0, sizeof(*iint));
+	memset(&hash, 0, sizeof(hash));
+	iint->ima_hash = &hash.hdr;
+	iint->ima_hash->algo = HASH_ALGO_SHA1;
+	iint->ima_hash->length = SHA1_DIGEST_SIZE;
+
+	printk(">>> prepare to calculate file[%s] hash\n", filename);
+
+	result = ima_calc_file_hash(file, &hash.hdr);
+	if (result < 0) {
+		return result;
+	}
+
+	printk(">>> prepare to succeed\n");
+
+	result = ima_alloc_init_template(iint, NULL, filename,
+					 NULL, 0, &entry);
+	if (result < 0)
+		return result;
+
+	printk(">>> prepare to record\n");
+	result = ima_store_template(entry, violation, NULL,
+			filename, pid_ns, FILE_CHECK);
+	if (result < 0)
+		ima_free_template_entry(entry);
+
+	printk(">>> succeed\n");
+	return result;
+}
+
+/*
+ * ima_record_task_for_ns - based on Trusted-Container.
+ *
+ * locates all files related to the task that creates a namspace,
+ * and records it into this namespace's measurement list.
+ */
+int ima_record_task_for_ns(struct pid_namespace* pid_ns) {
+
+	struct task_struct* task_p;
+	struct path files_path;
+	const unsigned char *cwd;
+
+	char *filename = NULL;
+
+	filename = kmalloc(PATH_MAX + 11, GFP_KERNEL);
+	if (!filename) {
+		printk("kmalloc failed.\n");
+		return -1;
+	}
+
+	printk(">>>> locate all files\n");
+	task_p = current;
+	if (task_p->mm && task_p->mm->exe_file) {
+		files_path = task_p->mm->exe_file->f_path;
+		cwd = ima_d_path(&files_path, &filename);
+		if (!cwd)
+			cwd = (const char *)task_p->mm->exe_file->f_dentry->d_name.name;
+		printk("[Wu Luo][DEBUG] record the current file[%s] for ns[%u]\n",
+				cwd, pid_ns->proc_inum);
+
+		// get a ns_pathname, for that IMA does not record a same file twice
+		sprintf(filename, "%u:%s", pid_ns->proc_inum, cwd);
+
+		// record it...
+		ima_add_ns_task(task_p->mm->exe_file, filename, pid_ns);
+	}
+
+	return 0;
+}
+
 /*
  * ima_create_namespace - based on Trusted-Container.
  * @pid_ns: pointer to the pid namespace to be created
@@ -379,7 +463,7 @@ int ima_module_check(struct file *file)
  {
  	struct pid_namespace_list *node;
  	struct list_head *pos;
- 	struct pid_namespace_list *p;
+ 	struct pid_namespace_list *p = NULL, *list = NULL;
  	struct pid_namespace_hash_entry *entry;
 
  	unsigned long key;
@@ -389,6 +473,14 @@ int ima_module_check(struct file *file)
  		return -1;
 
  	printk("[Wu Luo] create a new namespace<proc_inum>[%u]!\n", pid_ns->proc_inum);
+
+ 	// check whether this namespace exists
+ 	list = ima_lookup_namespace_entry(pid_ns->proc_inum);
+ 	if (list && list->ns && list->ns->cpcr
+ 					&& list->ns->cpcr->tfm) {
+ 		printk("[Wu Luo][INFO] namespace exists. We do nothing currently\n");
+ 		return 0;
+ 	}
 
  	if(pid_ns->cpcr) {
  		printk("[Wu Luo] cpcr exists, reset it...\n");
@@ -447,6 +539,11 @@ int ima_module_check(struct file *file)
  		entry->ns_list = node;
  		INIT_HLIST_NODE(&entry->hnext);
  		hlist_add_head_rcu(&entry->hnext, &ima_ns_htable.queue[key]);
+
+ 		// record the dummy program for Trusted Container
+ 		printk("[Wu Luo][DEBUG] the parent process is %s<--->%s\n",
+ 				current->comm, current->real_parent->comm);
+ 		ima_record_task_for_ns(pid_ns);
  	}
 
  	return 0;

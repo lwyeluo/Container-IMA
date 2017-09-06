@@ -76,7 +76,7 @@ static struct ima_queue_entry *ima_lookup_digest_entry(u8 *digest_value)
 }
 
 /* lookup up the digest value in the hash table, and return the entry */
-static struct pid_namespace_list *ima_lookup_namespace_entry(unsigned int proc_inum)
+struct pid_namespace_list *ima_lookup_namespace_entry(unsigned int proc_inum)
 {
 	struct pid_namespace_hash_entry *qe = NULL;
 	struct pid_namespace_list *ret = NULL;
