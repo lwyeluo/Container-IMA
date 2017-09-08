@@ -12,3 +12,8 @@ modules.order
 *.ko
 *.ko.cmd
 *.o.cmd
+/runc/vendor/pkg
+/runc//runc
+/runc/contrib/cmd/recvtty/recvtty
+/runc/man/man8
+/runc/release
