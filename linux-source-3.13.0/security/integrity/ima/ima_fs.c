@@ -23,7 +23,7 @@
 #include <linux/rcupdate.h>
 #include <linux/parser.h>
 
-#include <linux/pid_namespace.h>
+#include <linux/mount.h>
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/list.h>
@@ -413,13 +413,13 @@ static void *ima_ns_measurements_start(struct seq_file *m, loff_t *pos)
 	struct ima_queue_entry *qe;
 
 	// point to all measument list in this namespace
-	struct pid_namespace_list* node = m->private;
+	struct mnt_namespace_list* node = m->private;
 
 	if (node == NULL)
 		return NULL;
 
-	printk("[Wu Luo] show measurements log for [%u]\n",
-				node->ns->proc_inum);
+//	printk("[Wu Luo] show measurements log for [%u]\n",
+//				node->ns->proc_inum);
 
 	/* we need a lock since pos could point beyond last element */
 	rcu_read_lock();
@@ -438,7 +438,7 @@ static void *ima_ns_measurements_next(struct seq_file *m, void *v, loff_t *pos)
 	struct ima_queue_entry *qe = v;
 
 	// point to all measument list in this namespace
-	struct pid_namespace_list* node = m->private;
+	struct mnt_namespace_list* node = m->private;
 
 	if (node == NULL)
 		return NULL;
@@ -463,7 +463,7 @@ static int ima_ns_measurements_show(struct seq_file *m, void *v)
 	int i;
 
 	// point to all measument list in this namespace
-	struct pid_namespace_list* node = m->private;
+	struct mnt_namespace_list* node = m->private;
 
 	if (node == NULL)
 		return -1;
@@ -474,7 +474,7 @@ static int ima_ns_measurements_show(struct seq_file *m, void *v)
 		return -1;
 
 	/* 1st: PCR used (config option) */
-	seq_printf(m, "%u ", node->ns->proc_inum);
+	seq_printf(m, "%u ", node->proc_inum);
 
 	/* 2nd: SHA1 template hash */
 	ima_print_digest(m, e->digest, TPM_DIGEST_SIZE);
@@ -507,7 +507,7 @@ static int ima_ns_measurements_open(struct inode *inode, struct file *file)
 	struct seq_file *p = NULL;
 	int ret = -1;
 
-	struct pid_namespace_list* node = inode->i_private;
+	struct mnt_namespace_list* node = inode->i_private;
 
 	ret = seq_open(file, &ima_ns_measurements_seqops);
 	if(ret != 0)
@@ -517,7 +517,7 @@ static int ima_ns_measurements_open(struct inode *inode, struct file *file)
 
 	p->private = node;
 	printk("[Wu Luo] allocate file's priavte data:[%u]\n",
-			node->ns->proc_inum);
+			node->proc_inum);
 
 	return 0;
 }
@@ -532,14 +532,14 @@ static const struct file_operations ima_ns_measurements_ops = {
 /* create a new measure_log for a new namespace
  * If success, return 0, otherwise return -1
  */
-int ima_create_measurement_log(struct pid_namespace_list* node) {
+int ima_create_measurement_log(struct mnt_namespace_list* node) {
 	char file_name[20] = ""; //it will convert from a unsigned int
 
 	printk("[Wu Luo] enter ima_create_measurement_log\n");
-	if(!node->ns)
+	if(!node)
 		return -1;
 
-	sprintf(file_name, "%u", node->ns->proc_inum);
+	sprintf(file_name, "%u", node->proc_inum);
 
 	node->measurement_log = securityfs_create_file(file_name,
 			   S_IRUSR | S_IRGRP, ima_dir, node,
@@ -554,12 +554,12 @@ int ima_create_measurement_log(struct pid_namespace_list* node) {
 static void *ima_cpcr_measurements_start(struct seq_file *m, loff_t *pos)
 {
 	loff_t l = *pos;
-	struct pid_namespace_list *qe;
+	struct mnt_namespace_list *qe;
 
 	/* we need a lock since pos could point beyond last element */
 	rcu_read_lock();
 
-	list_for_each_entry_rcu(qe, &pid_ns_list.list, list) {
+	list_for_each_entry_rcu(qe, &mnt_ns_list.list, list) {
 		if (!l--) {
 			rcu_read_unlock();
 			return qe;
@@ -571,17 +571,17 @@ static void *ima_cpcr_measurements_start(struct seq_file *m, loff_t *pos)
 
 static void *ima_cpcr_measurements_next(struct seq_file *m, void *v, loff_t *pos)
 {
-	struct pid_namespace_list *qe = v;
+	struct mnt_namespace_list *qe = v;
 
 	/* lock protects when reading beyond last element
 	 * against concurrent list-extension
 	 */
 	rcu_read_lock();
-	qe = list_entry_rcu(qe->list.next, struct pid_namespace_list, list);
+	qe = list_entry_rcu(qe->list.next, struct mnt_namespace_list, list);
 	rcu_read_unlock();
 	(*pos)++;
 
-	return (&qe->list == &pid_ns_list.list) ? NULL : qe;
+	return (&qe->list == &mnt_ns_list.list) ? NULL : qe;
 }
 
 static void ima_cpcr_measurements_stop(struct seq_file *m, void *v)
@@ -592,14 +592,14 @@ static void ima_cpcr_measurements_stop(struct seq_file *m, void *v)
 static int ima_cpcr_measurements_show(struct seq_file *m, void *v)
 {
 	/* the list never shrinks, so we don't need a lock here */
-	struct pid_namespace_list *qe = v;
+	struct mnt_namespace_list *qe = v;
 
 	int i;
 
-	if(qe && qe->ns && qe->ns->cpcr) {
-		seq_printf(m, "%u ", qe->ns->proc_inum);
+	if(qe && qe->cpcr) {
+		seq_printf(m, "%u ", qe->proc_inum);
 		for (i = 0; i < CPCR_DATA_SIZE; i ++) {
-			seq_printf(m, "%02x", qe->ns->cpcr->data[i]);
+			seq_printf(m, "%02x", qe->cpcr->data[i]);
 		}
 		seq_puts(m, "\n");
 	} else

@@ -21,13 +21,6 @@ struct pidmap {
 
 struct bsd_acct_struct;
 
-#define CPCR_DATA_SIZE      20
-
-struct cPCR {
-	struct crypto_shash *tfm;
-    unsigned char data[CPCR_DATA_SIZE];
-};
-
 struct pid_namespace {
 	struct kref kref;
 	struct pidmap pidmap[PIDMAP_ENTRIES];
@@ -51,7 +44,6 @@ struct pid_namespace {
 	int hide_pid;
 	int reboot;	/* group exit code if this pidns was rebooted */
 	unsigned int proc_inum;
-    struct cPCR *cpcr;
 };
 
 extern struct pid_namespace init_pid_ns;

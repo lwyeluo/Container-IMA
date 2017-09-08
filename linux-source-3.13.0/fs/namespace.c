@@ -2969,6 +2969,7 @@ void put_mnt_ns(struct mnt_namespace *ns)
 {
 	if (!atomic_dec_and_test(&ns->count))
 		return;
+
 	drop_collected_mounts(&ns->root->mnt);
 	free_mnt_ns(ns);
 }
@@ -3144,7 +3145,9 @@ static int mntns_install(struct nsproxy *nsproxy, void *ns)
 	return 0;
 }
 
-static unsigned int mntns_inum(void *ns)
+// remove the static
+//	By Wu Luo
+unsigned int mntns_inum(void *ns)
 {
 	struct mnt_namespace *mnt_ns = ns;
 	return mnt_ns->proc_inum;

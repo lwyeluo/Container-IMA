@@ -142,9 +142,6 @@ static void destroy_pid_namespace(struct pid_namespace *ns)
 {
 	int i;
 
-	if(ns->cpcr)
-		kfree(ns->cpcr);
-
 	proc_free_inum(ns->proc_inum);
 	for (i = 0; i < PIDMAP_ENTRIES; i++)
 		kfree(ns->pidmap[i].page);

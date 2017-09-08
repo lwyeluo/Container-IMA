@@ -19,7 +19,6 @@
 #include <linux/module.h>
 #include <linux/file.h>
 #include <linux/binfmts.h>
-#include <linux/mount.h>
 #include <linux/mman.h>
 #include <linux/slab.h>
 #include <linux/xattr.h>
@@ -28,16 +27,15 @@
 #include <crypto/hash_info.h>
 #include <crypto/hash.h>
 
-#include <linux/pid_namespace.h>
+#include <linux/mount.h>
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/list.h>
-#include <linux/fdtable.h>
 
 #include "ima.h"
 
-/* list of all pid_namespace, used to find cpcr through proc_num */
-struct pid_namespace_list pid_ns_list;
+/* list of all mnt_namespace, used to find cpcr through proc_num */
+struct mnt_namespace_list mnt_ns_list;
 
 /* record the history value of physical PCR to bind all cPCRs into
  *  a physical PCR, i.e. PCR12
@@ -190,7 +188,8 @@ static int process_measurement(struct file *file, const char *filename,
 	struct evm_ima_xattr_data *xattr_value = NULL, **xattr_ptr = NULL;
 	int xattr_len = 0;
 
-	struct pid_namespace *ns = NULL;
+	struct mnt_namespace *ns = NULL;
+	unsigned int mnt_ns_num = CPCR_NULL_NAMESPACE;
 
 	if (!ima_initialized || !S_ISREG(inode->i_mode))
 		return 0;
@@ -250,21 +249,22 @@ static int process_measurement(struct file *file, const char *filename,
 	ns_pathname = kmalloc(PATH_MAX + 11, GFP_KERNEL);
 	if (ns_pathname && pathname) {
 		if(current->nsproxy)
-			ns = current->nsproxy->pid_ns_for_children;
+			ns = current->nsproxy->mnt_ns;
 	} else {
 		printk("[Wu Luo] ERROR: failed to kmalloc ns_pathname\n");
 		goto out;
 	}
 
 	if(ns) {
-		sprintf(ns_pathname, "%u:%s", ns->proc_inum, pathname);
+		mnt_ns_num = mntns_inum(ns);
+		sprintf(ns_pathname, "%u:%s", mnt_ns_num, pathname);
 	} else {
 		strcpy(ns_pathname, pathname);
 	}
 
 	if (action & IMA_MEASURE) {
 		ima_store_measurement(iint, file, ns_pathname,
-				      xattr_value, xattr_len, ns, function);
+				      xattr_value, xattr_len, mnt_ns_num, function);
 	}
 	if (action & IMA_APPRAISE_SUBMASK)
 		rc = ima_appraise_measurement(_func, iint, file, ns_pathname,
@@ -369,7 +369,7 @@ int ima_module_check(struct file *file)
 }
 
 int ima_add_ns_task(struct file* file, char* filename,
-		struct pid_namespace* pid_ns)
+		unsigned int mnt_ns_num)
 {
 	struct ima_template_entry *entry;
 	struct integrity_iint_cache tmp_iint, *iint = &tmp_iint;
@@ -403,7 +403,7 @@ int ima_add_ns_task(struct file* file, char* filename,
 
 	printk(">>> prepare to record\n");
 	result = ima_store_template(entry, violation, NULL,
-			filename, pid_ns, FILE_CHECK);
+			filename, mnt_ns_num, FILE_CHECK);
 	if (result < 0)
 		ima_free_template_entry(entry);
 
@@ -417,7 +417,7 @@ int ima_add_ns_task(struct file* file, char* filename,
  * locates all files related to the task that creates a namspace,
  * and records it into this namespace's measurement list.
  */
-int ima_record_task_for_ns(struct pid_namespace* pid_ns) {
+int ima_record_task_for_ns(unsigned int mnt_ns_num) {
 
 	struct task_struct* task_p;
 	struct path files_path;
@@ -439,13 +439,13 @@ int ima_record_task_for_ns(struct pid_namespace* pid_ns) {
 		if (!cwd)
 			cwd = (const char *)task_p->mm->exe_file->f_dentry->d_name.name;
 		printk("[Wu Luo][DEBUG] record the current file[%s] for ns[%u]\n",
-				cwd, pid_ns->proc_inum);
+				cwd, mnt_ns_num);
 
 		// get a ns_pathname, for that IMA does not record a same file twice
-		sprintf(filename, "%u:%s", pid_ns->proc_inum, cwd);
+		sprintf(filename, "%u:%s", mnt_ns_num, cwd);
 
 		// record it...
-		ima_add_ns_task(task_p->mm->exe_file, filename, pid_ns);
+		ima_add_ns_task(task_p->mm->exe_file, filename, mnt_ns_num);
 	}
 
 	return 0;
@@ -455,99 +455,108 @@ int ima_record_task_for_ns(struct pid_namespace* pid_ns) {
  * ima_create_namespace - based on Trusted-Container.
  * @pid_ns: pointer to the pid namespace to be created
  *
- * create a cPCR towards this new pid_namespace.
+ * create a cPCR towards this new mnt_namespace.
  *
  * On success return 0.  On error, return -1.
  */
- int ima_create_namespace(struct pid_namespace* pid_ns)
+ int ima_create_namespace(unsigned int mnt_ns_num)
  {
- 	struct pid_namespace_list *node;
+ 	struct mnt_namespace_list *node;
  	struct list_head *pos;
- 	struct pid_namespace_list *p = NULL, *list = NULL;
- 	struct pid_namespace_hash_entry *entry;
+ 	struct mnt_namespace_list *p = NULL, *list = NULL;
+ 	struct mnt_namespace_hash_entry *entry;
 
  	unsigned long key;
  	int rc = -1;
 
- 	if(!pid_ns)
- 		return -1;
+ 	printk("[Wu Luo] create a new namespace<proc_inum>[%u]!\n", mnt_ns_num);
 
- 	printk("[Wu Luo] create a new namespace<proc_inum>[%u]!\n", pid_ns->proc_inum);
+ 	// check whether the systemd creates this namespace, we should ignore that
+ 	if (!strcmp(current->real_parent->comm, "systemd")) {
+ 		printk("[Wu Luo] systemd creates a new mnt namespace, "
+ 				"we ignore it. %s<--->%s\n",
+				current->comm, current->real_parent->comm);
+ 		return 0;
+ 	}
 
  	// check whether this namespace exists
- 	list = ima_lookup_namespace_entry(pid_ns->proc_inum);
- 	if (list && list->ns && list->ns->cpcr
- 					&& list->ns->cpcr->tfm) {
+ 	list = ima_lookup_namespace_entry(mnt_ns_num);
+ 	if (list && list->cpcr && list->cpcr->tfm) {
  		printk("[Wu Luo][INFO] namespace exists. We do nothing currently\n");
  		return 0;
  	}
 
- 	if(pid_ns->cpcr) {
- 		printk("[Wu Luo] cpcr exists, reset it...\n");
- 		memset(pid_ns->cpcr->data, 0x00, CPCR_DATA_SIZE);
- 	} else {
- 		printk("[Wu Luo] cpcr does not exist, create it...\n");
- 		pid_ns->cpcr = kmalloc(sizeof(struct cPCR), GFP_KERNEL);
- 		if(!pid_ns->cpcr)
- 			return -1;
+	printk("[Wu Luo] cpcr does not exist, create it...\n");
+	node = (struct mnt_namespace_list*)kmalloc(sizeof(struct mnt_namespace_list), GFP_KERNEL);
+	if(!node) {
+		printk("[Wu Luo] failed to kmalloc struct mnt_namespace_list[%u]\n",
+				sizeof(struct mnt_namespace_list));
+		return 0;//-1;
+	}
+	node->cpcr = kmalloc(sizeof(struct cPCR), GFP_KERNEL);
+	if(!node->cpcr)
+		goto out;
 
- 		pid_ns->cpcr->tfm = crypto_alloc_shash("sha1", 0, CRYPTO_ALG_ASYNC);
-		if (IS_ERR(pid_ns->cpcr->tfm)) {
-			rc = PTR_ERR(pid_ns->cpcr->tfm);
-			printk("[Wu Luo] ERROR: Can not allocate tfm (reason: %d)\n",
-				   "sha1", rc);
-			return -1;
-		}
+	node->cpcr->tfm = crypto_alloc_shash("sha1", 0, CRYPTO_ALG_ASYNC);
+	if (IS_ERR(node->cpcr->tfm)) {
+		rc = PTR_ERR(node->cpcr->tfm);
+		printk("[Wu Luo] ERROR: Can not allocate tfm (reason: %d)\n",
+			   "sha1", rc);
+		goto out;
+	}
 
-		memset(pid_ns->cpcr->data, 0x00, CPCR_DATA_SIZE);
+	memset(node->cpcr->data, 0x00, CPCR_DATA_SIZE);
 
- 		node = (struct pid_namespace_list*)kmalloc(sizeof(struct pid_namespace_list), GFP_KERNEL);
- 		if(!node) {
-			printk("[Wu Luo] failed to kmalloc struct pid_namespace_list[%u]\n", sizeof(struct pid_namespace_list));
- 			kfree(pid_ns->cpcr);
- 			return 0;//-1;
- 		}
- 		node->ns = pid_ns;
+	node->proc_inum = mnt_ns_num;
 
- 		// record all measurement events in this namespace
- 		INIT_LIST_HEAD(&node->measurements);
+	// record all measurement events in this namespace
+	INIT_LIST_HEAD(&node->measurements);
 
-		ima_create_measurement_log(node);
+	if(ima_create_measurement_log(node) != 0)
+		goto out;
 
-		if(!pid_ns_list.list.next) {
-			INIT_LIST_HEAD(&pid_ns_list.list);
-		}
- 		list_add_tail(&node->list, &pid_ns_list.list);
- 		printk("[Wu Luo] ns add into pid_ns_list\n");
- 		printk("[Wu Luo] list test!");
- 		list_for_each(pos, &pid_ns_list.list) {
- 			p = list_entry(pos, struct pid_namespace_list, list);
- 			printk("\t-> %u ", p->ns->proc_inum);
- 		}
+	if(!mnt_ns_list.list.next) {
+		INIT_LIST_HEAD(&mnt_ns_list.list);
+	}
+	list_add_tail(&node->list, &mnt_ns_list.list);
+	printk("[Wu Luo] ns add into mnt_ns_list\n");
+	printk("[Wu Luo] list test!");
+	list_for_each(pos, &mnt_ns_list.list) {
+		p = list_entry(pos, struct mnt_namespace_list, list);
+		printk("\t-> %u ", p->proc_inum);
+	}
 
- 		// Update the hash table
- 		atomic_long_inc(&ima_ns_htable.len);
- 		key = ima_hash_ns_key(node->ns->proc_inum);
+	// Update the hash table
+	atomic_long_inc(&ima_ns_htable.len);
+	key = ima_hash_ns_key(node->proc_inum);
 
- 		entry = kmalloc(sizeof(*entry), GFP_KERNEL);
- 		if (entry == NULL) {
- 			printk("[Wu Luo] failed to kmalloc struct pid_namespace_hash_entry[%u]\n",
- 					sizeof(struct pid_namespace_hash_entry));
-			kfree(pid_ns->cpcr);
-			return 0;//-1;
- 		}
- 		entry->ns_list = node;
- 		INIT_HLIST_NODE(&entry->hnext);
- 		hlist_add_head_rcu(&entry->hnext, &ima_ns_htable.queue[key]);
+	entry = kmalloc(sizeof(*entry), GFP_KERNEL);
+	if (entry == NULL) {
+		printk("[Wu Luo] failed to kmalloc struct mnt_namespace_hash_entry[%u]\n",
+				sizeof(struct mnt_namespace_hash_entry));
+		goto out;
+	}
+	entry->ns_list = node;
+	INIT_HLIST_NODE(&entry->hnext);
+	hlist_add_head_rcu(&entry->hnext, &ima_ns_htable.queue[key]);
 
- 		// record the dummy program for Trusted Container
- 		printk("[Wu Luo][DEBUG] the parent process is %s<--->%s\n",
- 				current->comm, current->real_parent->comm);
- 		ima_record_task_for_ns(pid_ns);
- 	}
+	// record the dummy program for Trusted Container
+	printk("[Wu Luo][DEBUG] the parent process is %s<--->%s\n",
+			current->comm, current->real_parent->comm);
+	ima_record_task_for_ns(mnt_ns_num);
 
+	return 0;
+
+out:
+	if (node) {
+		if (node->cpcr)
+			if (!IS_ERR(node->cpcr->tfm))
+				kfree(node->cpcr->tfm);
+			kfree(node->cpcr);
+		kfree(node);
+	}
  	return 0;
- }
+}
 EXPORT_SYMBOL_GPL(ima_create_namespace);
 
 int __init ima_init_cpcr_structures(void) {

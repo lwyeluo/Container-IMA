@@ -21,7 +21,7 @@ extern void ima_file_free(struct file *file);
 extern int ima_file_mmap(struct file *file, unsigned long prot);
 extern int ima_module_check(struct file *file);
 
-extern int ima_create_namespace(struct pid_namespace* pid_ns);
+extern int ima_create_namespace(unsigned int mnt_ns_num);
 
 #else
 static inline int ima_bprm_check(struct linux_binprm *bprm)

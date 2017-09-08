@@ -21,7 +21,6 @@
 #include <linux/module.h>
 #include <linux/rculist.h>
 #include <linux/slab.h>
-#include <linux/pid_namespace.h>
 #include <linux/crypto.h>
 #include <linux/scatterlist.h>
 #include <linux/err.h>
@@ -76,17 +75,17 @@ static struct ima_queue_entry *ima_lookup_digest_entry(u8 *digest_value)
 }
 
 /* lookup up the digest value in the hash table, and return the entry */
-struct pid_namespace_list *ima_lookup_namespace_entry(unsigned int proc_inum)
+struct mnt_namespace_list *ima_lookup_namespace_entry(unsigned int proc_inum)
 {
-	struct pid_namespace_hash_entry *qe = NULL;
-	struct pid_namespace_list *ret = NULL;
+	struct mnt_namespace_hash_entry *qe = NULL;
+	struct mnt_namespace_list *ret = NULL;
 	unsigned int key;
 	int rc;
 
 	key = ima_hash_ns_key(proc_inum);
 	rcu_read_lock();
 	hlist_for_each_entry_rcu(qe, &ima_ns_htable.queue[key], hnext) {
-		if (qe->ns_list->ns->proc_inum == proc_inum) {
+		if (qe->ns_list->proc_inum == proc_inum) {
 			ret = qe->ns_list;
 			break;
 		}
@@ -104,7 +103,7 @@ struct pid_namespace_list *ima_lookup_namespace_entry(unsigned int proc_inum)
  * 	modified to add digest entry into corresponding measurement list
  */
 static int ima_add_digest_entry(struct ima_template_entry *entry,
-		struct pid_namespace_list *list, int function)
+		struct mnt_namespace_list *list, int function)
 {
 	struct ima_queue_entry *qe, *qe_kernel;
 	unsigned int key;
@@ -118,10 +117,9 @@ static int ima_add_digest_entry(struct ima_template_entry *entry,
 
 	INIT_LIST_HEAD(&qe->later);
 
-	if (list && list->ns && list->ns->cpcr
-			&& list->ns->cpcr->tfm) {
+	if (list && list->cpcr && list->cpcr->tfm) {
 		printk("[Wu Luo][DEBUG] a ME added into namespace<%u>\n",
-				list->ns->proc_inum);
+				list->proc_inum);
 		list_add_tail_rcu(&qe->later, &list->measurements);
 	} else {
 		list_add_tail_rcu(&qe->later, &ima_measurements);
@@ -151,34 +149,34 @@ static int ima_add_digest_entry(struct ima_template_entry *entry,
 /* For Trusted Container Begin*/
 
 /* extend to the related cPCR and set the iterative value into PCR */
-static int ima_cpcr_extend(const u8 *hash, struct pid_namespace *ns) {
+static int ima_cpcr_extend(const u8 *hash, struct mnt_namespace_list* list) {
 
 	int i;
 	int rc = 0;
 
 	struct {
 		struct shash_desc shash;
-		char ctx[crypto_shash_descsize(ns->cpcr->tfm)];
+		char ctx[crypto_shash_descsize(list->cpcr->tfm)];
 	} desc;
 
-	desc.shash.tfm = ns->cpcr->tfm;
+	desc.shash.tfm = list->cpcr->tfm;
 	desc.shash.flags = 0;
 
 	rc = crypto_shash_init(&desc.shash);
 	if (rc != 0)
 		return rc;
 
-	printk("[Wu Luo] extend cpcr for ns[%u %u %u]:", ns->proc_inum, sizeof(ns->cpcr->data), sizeof(hash));
+	printk("[Wu Luo] extend cpcr for ns[%u %u %u]:", list->proc_inum, sizeof(list->cpcr->data), sizeof(hash));
 //	for (i = 0; i < 20; i++) {
 //		printk( "%02x\t", ns->cpcr->data[i]);
 //	}
 	printk("\n");
 
-	rc = crypto_shash_update(&desc.shash, ns->cpcr->data, CPCR_DATA_SIZE);
+	rc = crypto_shash_update(&desc.shash, list->cpcr->data, CPCR_DATA_SIZE);
 
 	rc = crypto_shash_update(&desc.shash, hash, CPCR_DATA_SIZE);
 	if (!rc)
-		crypto_shash_final(&desc.shash, ns->cpcr->data);
+		crypto_shash_final(&desc.shash, list->cpcr->data);
 
 //	printk("\n final cpcr: ");
 //	for (i = 0; i < 20; i++) {
@@ -222,7 +220,7 @@ static int ima_pcr_read(int index, u8 *value) {
 /* extend to the related cPCR and set the iterative value into PCR */
 static int ima_cpcr_bind(void) {
 	u8 digest[TPM_DIGEST_SIZE];
-	struct pid_namespace_list *qe;
+	struct mnt_namespace_list *qe;
 
 	int i;
 	int rc = 0;
@@ -250,8 +248,8 @@ static int ima_cpcr_bind(void) {
 
 	// collect all cPCRs
 	rcu_read_lock();
-	list_for_each_entry_rcu(qe, &pid_ns_list.list, list) {
-		rc = crypto_shash_update(&desc.shash, qe->ns->cpcr->data, CPCR_DATA_SIZE);
+	list_for_each_entry_rcu(qe, &mnt_ns_list.list, list) {
+		rc = crypto_shash_update(&desc.shash, qe->cpcr->data, CPCR_DATA_SIZE);
 	}
 	rcu_read_unlock();
 
@@ -282,7 +280,7 @@ static int ima_cpcr_bind(void) {
 int ima_add_template_entry(struct ima_template_entry *entry, int violation,
 			   const char *op, struct inode *inode,
 			   const unsigned char *filename,
-			   struct pid_namespace *ns,
+			   unsigned int mnt_ns_num,
 			   int function)
 {
 	u8 digest[TPM_DIGEST_SIZE];
@@ -291,7 +289,7 @@ int ima_add_template_entry(struct ima_template_entry *entry, int violation,
 	int audit_info = 1;
 	int result = 0, tpmresult = 0;
 
-	struct pid_namespace_list* list = NULL;
+	struct mnt_namespace_list* list = NULL;
 
 	mutex_lock(&ima_extend_list_mutex);
 	if (!violation) {
@@ -303,12 +301,12 @@ int ima_add_template_entry(struct ima_template_entry *entry, int violation,
 		}
 	}
 
-	// locate the corresponding pid_ns_list
-	// if we do not get it, there is no pid_namespace_list and
+	// locate the corresponding mnt_ns_list
+	// if we do not get it, there is no mnt_namespace_list and
 	//	we add digest entry into the default measurement list
-	if (ns) {
+	if (mnt_ns_num != CPCR_NULL_NAMESPACE) {
 		// get it
-		list = ima_lookup_namespace_entry(ns->proc_inum);
+		list = ima_lookup_namespace_entry(mnt_ns_num);
 	}
 
 	result = ima_add_digest_entry(entry, list, function);
@@ -327,13 +325,12 @@ int ima_add_template_entry(struct ima_template_entry *entry, int violation,
 	}
 
 	// extend cPCR
-	if (list && list->ns && list->ns->cpcr
-				&& list->ns->cpcr->tfm) {
+	if (list && list->cpcr && list->cpcr->tfm) {
 		printk("[Wu Luo] prepared to extend cPCR with %s\n", filename);
 
 		// event occur in a namespace, so we extend this cPCR
 		//	and bind all cPCRs into a physical PCR
-		tpmresult = ima_cpcr_extend(digest, ns);
+		tpmresult = ima_cpcr_extend(digest, list);
 		if(tpmresult != 0) {
 			printk("[Wu Luo] failed to extend cPCR\n");
 		}

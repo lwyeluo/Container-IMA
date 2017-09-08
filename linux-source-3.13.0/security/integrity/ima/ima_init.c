@@ -73,7 +73,7 @@ static void __init ima_add_boot_aggregate(void)
 		return;
 
 	result = ima_store_template(entry, violation, NULL,
-				    boot_aggregate_name, NULL, FILE_CHECK);
+				    boot_aggregate_name, CPCR_NULL_NAMESPACE, FILE_CHECK);
 	if (result < 0)
 		ima_free_template_entry(entry);
 	return;
