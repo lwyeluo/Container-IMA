@@ -17,8 +17,11 @@ cd /go/src/github.com/opencontainers
 
 cp -rf /usr/src/Trusted-Container/runc .
 
+# add dependencies
 apt-get install libseccomp-dev 
 apt-get install libapparmor-dev
+
+# make runc
 cd runc/
 make 
 make install

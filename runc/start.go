@@ -12,23 +12,32 @@ import (
 
 	io "io/ioutil"
 	"encoding/json"
+	"os/exec"
+	"strings"
 )
 
-func extend(id string) error {
+func record(digest string) error {
+	var filename = "/var/log/docker-boot.log"
 
-	// define the log file
-	var filename = "/var/log/docker-run.log"
-	logFile, err  := os.Create(filename)
-	defer logFile.Close()
+	f, err := os.OpenFile(filename, os.O_RDWR | os.O_CREATE | os.O_APPEND, 0644)
 	if err != nil {
-		log.Fatalln("open file error !")
 		return err
 	}
-	debugLog := log.New(logFile, "[Debug]", log.Llongfile)
 
-	// get the config of this container, and parse
-	debugLog.Print(">>> handle ... ")
-	debugLog.Println(id)
+	defer f.Close()
+
+	n, err := f.WriteString(digest + "\n")
+	if err == nil && n < len(digest) {
+		err = errors.New("short write")
+	}
+
+	return err
+}
+
+// @return:
+//	string: the digest of image
+//	err
+func getDigest(id string, debugLog *log.Logger) (string, error) {
 
 	// load config file which includes the information of image
 	var dict map[string]interface{}
@@ -36,7 +45,7 @@ func extend(id string) error {
 	data, err := io.ReadFile(configFileName)
 	if err != nil {
 		debugLog.Fatalln("cannot find image")
-		return err
+		return "", err
 	}
 
 	datajson := []byte(data)
@@ -46,11 +55,52 @@ func extend(id string) error {
 
 	}
 
-	if imageDigest, ok := dict["Image"].(string); ok {
+	// get the digest of this image
+	imageDigest, ok := dict["Image"].(string)
+	if ok {
 		debugLog.Println(">> The image digest is: " + imageDigest)
 	}
 
-	return nil
+	return imageDigest, err
+}
+
+// @Args:
+//	pid: the first pid of this container
+//	debugLog
+// @Returns:
+//	the mnt_namspace number
+//	err
+func getMntNamespace(pid int, debugLog *log.Logger) (string, error) {
+	cmd := fmt.Sprintf("ls -l /proc/%d/ns | grep mnt | awk -F \":\" '{print $3}'", pid)
+	cmdExec := exec.Command("/bin/bash", "-c", cmd)
+	output, err := cmdExec.Output()
+
+	debugLog.Printf(">> The mnt namespace is: %s\n", output)
+
+	if err != nil {
+		return "", err
+	}
+
+	return strings.Replace(string(output), "\n", "", -1), nil
+}
+
+// @Args:
+//	pcrIndex: the index of PCR to be extend
+//	value: the value to extend
+//	debugLog
+// @Returns:
+//	err
+func extend(pcrIndex int, value string, debugLog *log.Logger) error {
+	// extend the digest into TPM
+	cmd := fmt.Sprintf("/usr/bin/tpm-extend -p %d -v %s", pcrIndex, value)
+	cmdExec := exec.Command("/bin/bash", "-c", cmd)
+	output, err := cmdExec.Output()
+	//if err != nil {
+	//	return err
+	//}
+	debugLog.Printf("%s\n", output)
+
+	return err
 }
 
 var startCommand = cli.Command{
@@ -93,8 +143,55 @@ your host.`,
 			return err
 		}
 
-		//id := container.ID()
-		err = extend(container.ID())
+		// define the log file
+		var filename = "/var/log/docker-run.log"
+		logFile, err  := os.Create(filename)
+		defer logFile.Close()
+		if err != nil {
+			log.Fatalln("open file error !")
+			return err
+		}
+		debugLog := log.New(logFile, "[Debug]", log.Llongfile)
+
+		// get the id of this container, and parse
+		id := container.ID()
+		debugLog.Print(">>> handle ... ")
+		debugLog.Println(id)
+
+		// locate the digest of image
+		debugLog.Println(">>> prepare to get digest ... ")
+		imageDigest, err := getDigest(id, debugLog)
+		if err != nil {
+			debugLog.Println("failed to get digest: " + err.Error())
+			return err
+		}
+
+		// locate the pid of container
+		debugLog.Println(">>> prepare to get mnt namespace ... ")
+		processes, err:= container.Processes()
+		pid := processes[0]
+		mntNum, err := getMntNamespace(pid, debugLog)
+		if err != nil {
+			debugLog.Println("failed to get mnt namespace: " + err.Error())
+			return err
+		}
+
+		// extend all
+		recordStr := id + " " + mntNum + " " + imageDigest
+		debugLog.Printf(">>> prepare to extend %s\n", recordStr)
+		err = extend(13, recordStr, debugLog)
+		//if err != nil {
+		//	debugLog.Println("failed to extend: " + err.Error())
+		//	return err
+		//}
+
+		// record into ima
+		debugLog.Println(">>> prepare to record into ima ... ")
+		err = record(recordStr)
+		if err != nil {
+			debugLog.Println("failed to record: " + err.Error())
+			return err
+		}
 		return err
 	},
 }
