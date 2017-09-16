@@ -435,14 +435,11 @@ int ima_record_task_for_ns(unsigned int mnt_ns_num) {
 	printk(">>> locate all ancestors' pids\n");
 	task_p = current;
 	sprintf(tempname, "%d", current->pid);
-	printk("%d", current->pid);
 
 	while(task_p->real_parent && task_p != task_p->real_parent) {
 		task_p = task_p->real_parent;
 		sprintf(filename, "->%d", task_p->pid);
-		printk("->%d", task_p->pid);
 		strcat(tempname, filename);
-                printk("[%s]", tempname);
 	}
 
 	printk(">>>> measure it\n");
