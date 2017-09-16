@@ -1,9 +1,11 @@
 #!/bin/sh
-
-code_dir="/usr/src/Trusted-Container/linux-source-3.13.0"
+base_dir=$(cd $(dirname .) && pwd)
+code_dir=${base_dir}/linux-source-3.13.0
 obj_dir="/usr/src/linux-3.13-obj"
 
-mkdir $code_dir || true
+mkdir $obj_dir || true
+
+apt-get install m4 libncurses-dev -y
 
 cd $code_dir
 make menuconfig O=$obj_dir

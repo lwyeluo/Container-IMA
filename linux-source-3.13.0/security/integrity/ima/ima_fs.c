@@ -555,9 +555,16 @@ static void *ima_cpcr_measurements_start(struct seq_file *m, loff_t *pos)
 {
 	loff_t l = *pos;
 	struct mnt_namespace_list *qe;
+	int i = 0;
 
 	/* we need a lock since pos could point beyond last element */
 	rcu_read_lock();
+
+	seq_puts(m, "history ");
+	for (i = 0; i < CPCR_DATA_SIZE; i ++) {
+		seq_printf(m, "%02x", cpcr_for_history.data[i]);
+	}
+	seq_puts(m, "\n");
 
 	list_for_each_entry_rcu(qe, &mnt_ns_list.list, list) {
 		if (!l--) {

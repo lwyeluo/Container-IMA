@@ -1,6 +1,7 @@
 linux-source-3.13.0/.tags*
 *.tag*
 linux-source-3.13.0/.settings/
+linux-source-3.13.0/.cproject
 
 *.mod.o
 *.mod.c

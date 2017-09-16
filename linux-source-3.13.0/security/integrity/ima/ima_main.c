@@ -423,15 +423,29 @@ int ima_record_task_for_ns(unsigned int mnt_ns_num) {
 	struct path files_path;
 	const unsigned char *cwd;
 
-	char *filename = NULL;
+	char *filename = NULL, *tempname = NULL;
 
 	filename = kmalloc(PATH_MAX + 11, GFP_KERNEL);
-	if (!filename) {
+	tempname = kmalloc(PATH_MAX + 11, GFP_KERNEL);
+	if ((!filename) || (!tempname)) {
 		printk("kmalloc failed.\n");
 		return -1;
 	}
 
-	printk(">>>> locate all files\n");
+	printk(">>> locate all ancestors' pids\n");
+	task_p = current;
+	sprintf(tempname, "%d", current->pid);
+	printk("%d", current->pid);
+
+	while(task_p->real_parent && task_p != task_p->real_parent) {
+		task_p = task_p->real_parent;
+		sprintf(filename, "->%d", task_p->pid);
+		printk("->%d", task_p->pid);
+		strcat(tempname, filename);
+                printk("[%s]", tempname);
+	}
+
+	printk(">>>> measure it\n");
 	task_p = current;
 	if (task_p->mm && task_p->mm->exe_file) {
 		files_path = task_p->mm->exe_file->f_path;
@@ -442,7 +456,7 @@ int ima_record_task_for_ns(unsigned int mnt_ns_num) {
 				cwd, mnt_ns_num);
 
 		// get a ns_pathname, for that IMA does not record a same file twice
-		sprintf(filename, "%u:%s", mnt_ns_num, cwd);
+		sprintf(filename, "%s %u:%s", tempname, mnt_ns_num, cwd);
 
 		// record it...
 		ima_add_ns_task(task_p->mm->exe_file, filename, mnt_ns_num);
