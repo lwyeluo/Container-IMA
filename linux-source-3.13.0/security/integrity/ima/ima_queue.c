@@ -125,19 +125,19 @@ static int ima_add_digest_entry(struct ima_template_entry *entry,
 		list_add_tail_rcu(&qe->later, &ima_measurements);
 	}
 
-	if (function == MODULE_CHECK) {
-		// if there is a kernel module, we add it into ima_kernel_measurements
-		qe_kernel = kmalloc(sizeof(*qe_kernel), GFP_KERNEL);
-		if (qe_kernel == NULL) {
-			pr_err("IMA: OUT OF MEMORY ERROR creating queue entry.\n");
-			return -ENOMEM;
-		}
-		qe_kernel->entry = entry;
-
-		INIT_LIST_HEAD(&qe_kernel->later);
-
-		list_add_tail_rcu(&qe_kernel->later, &ima_kernel_measurements);
-	}
+//	if (function == MODULE_CHECK) {
+//		// if there is a kernel module, we add it into ima_kernel_measurements
+//		qe_kernel = kmalloc(sizeof(*qe_kernel), GFP_KERNEL);
+//		if (qe_kernel == NULL) {
+//			pr_err("IMA: OUT OF MEMORY ERROR creating queue entry.\n");
+//			return -ENOMEM;
+//		}
+//		qe_kernel->entry = entry;
+//
+//		INIT_LIST_HEAD(&qe_kernel->later);
+//
+//		list_add_tail_rcu(&qe_kernel->later, &ima_kernel_measurements);
+//	}
 
 	atomic_long_inc(&ima_htable.len);
 	key = ima_hash_key(entry->digest);
@@ -319,10 +319,10 @@ int ima_add_template_entry(struct ima_template_entry *entry, int violation,
 	if (violation)		/* invalidate pcr */
 		memset(digest, 0xff, sizeof digest);
 
-	// if there is a kernel module, we should extend it right now
-	if (function == MODULE_CHECK) {
-		tpmresult = ima_pcr_extend(CONFIG_IMA_KERNEL_MODULE_PCR_IDX, digest);
-	}
+//	// if there is a kernel module, we should extend it right now
+//	if (function == MODULE_CHECK) {
+//		tpmresult = ima_pcr_extend(CONFIG_IMA_KERNEL_MODULE_PCR_IDX, digest);
+//	}
 
 	// extend cPCR
 	if (list && list->cpcr && list->cpcr->tfm) {

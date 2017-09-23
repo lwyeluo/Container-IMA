@@ -355,7 +355,7 @@ out:
 
 static struct dentry *ima_dir;
 static struct dentry *binary_runtime_measurements;
-static struct dentry *kernel_module_measurements;
+//static struct dentry *kernel_module_measurements;
 static struct dentry *ascii_runtime_measurements;
 static struct dentry *runtime_measurements_count;
 static struct dentry *violations;
@@ -639,7 +639,7 @@ static const struct file_operations ima_cpcr_measurements_ops = {
 
 int __init ima_fs_init(void)
 {
-	struct ima_mesurement_list* ima_kernel_ml = NULL;
+	//struct ima_mesurement_list* ima_kernel_ml = NULL;
 	struct ima_mesurement_list* ima_default_ml = NULL;
 
 	ima_dir = securityfs_create_dir("ima", NULL);
@@ -668,20 +668,20 @@ int __init ima_fs_init(void)
 	if (IS_ERR(ascii_runtime_measurements))
 		goto out;
 
-	ima_kernel_ml = kmalloc(sizeof(struct ima_mesurement_list), GFP_KERNEL);
-	if(!ima_kernel_ml) {
-		printk("[Wu Luo] failed to kmalloc struct ima_mesurement_list\n");
-		goto out;
-	}
-	ima_kernel_ml->pcr_idx = CONFIG_IMA_KERNEL_MODULE_PCR_IDX;
-	ima_kernel_ml->measurements = &ima_kernel_measurements;
-
-	kernel_module_measurements =
-		securityfs_create_file("kernel_module_measurements",
-				   S_IRUSR | S_IRGRP, ima_dir, ima_kernel_ml,
-				   &ima_ascii_measurements_ops);
-	if (IS_ERR(kernel_module_measurements))
-		goto out;
+//	ima_kernel_ml = kmalloc(sizeof(struct ima_mesurement_list), GFP_KERNEL);
+//	if(!ima_kernel_ml) {
+//		printk("[Wu Luo] failed to kmalloc struct ima_mesurement_list\n");
+//		goto out;
+//	}
+//	ima_kernel_ml->pcr_idx = CONFIG_IMA_KERNEL_MODULE_PCR_IDX;
+//	ima_kernel_ml->measurements = &ima_kernel_measurements;
+//
+//	kernel_module_measurements =
+//		securityfs_create_file("kernel_module_measurements",
+//				   S_IRUSR | S_IRGRP, ima_dir, ima_kernel_ml,
+//				   &ima_ascii_measurements_ops);
+//	if (IS_ERR(kernel_module_measurements))
+//		goto out;
 
 	runtime_measurements_count =
 	    securityfs_create_file("runtime_measurements_count",
