@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"os/exec"
 	"strings"
+        "crypto/sha1"
 )
 
 func record(digest string) error {
@@ -179,9 +180,14 @@ your host.`,
 		}
 
 		// extend all
-		recordStr := id + " " + mntNum + " " + imageDigest + " " + configFileName
-		debugLog.Printf(">>> prepare to extend %s\n", recordStr)
-		err = extend(11, recordStr, debugLog)
+		recordStr := "\"" + id + " " + mntNum + " " + imageDigest + " " + configFileName + "\""
+                // calculate its' hash value
+                hs := sha1.New()
+                hs.Write([]byte(recordStr))
+                hashString := fmt.Sprintf("%x", hs.Sum(nil))
+                
+                debugLog.Printf(">>> prepare to extend %s %s\n", recordStr, hashString)
+		err = extend(11, hashString, debugLog)
 		//if err != nil {
 		//	debugLog.Println("failed to extend: " + err.Error())
 		//	return err
@@ -189,7 +195,7 @@ your host.`,
 
 		// record into ima
 		debugLog.Println(">>> prepare to record into ima ... ")
-		err = record(recordStr)
+		err = record(recordStr + " " + hashString)
 		if err != nil {
 			debugLog.Println("failed to record: " + err.Error())
 			return err

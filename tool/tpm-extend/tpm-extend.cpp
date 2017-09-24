@@ -64,15 +64,15 @@ int main(int argc, char **argv)
     Debug("Get TPM Handle", result);
 
     //Get the SRK handle
-    result = Tspi_Context_LoadKeyByUUID(hContext, TSS_PS_TYPE_SYSTEM, SRK_UUID, &hSRK);
-    Debug("Get the SRK handle", result);
-
-    //Get the SRK policy
-    result = Tspi_GetPolicyObject(hSRK, TSS_POLICY_USAGE, &hSRKPolicy);
-    Debug("Get the SRK policy", result);
-
-    //Then set the SRK policy to be the well known secret
-    result = Tspi_Policy_SetSecret(hSRKPolicy, TSS_SECRET_MODE_SHA1, 20, wks);
+//    result = Tspi_Context_LoadKeyByUUID(hContext, TSS_PS_TYPE_SYSTEM, SRK_UUID, &hSRK);
+//    Debug("Get the SRK handle", result);
+//
+//    //Get the SRK policy
+//    result = Tspi_GetPolicyObject(hSRK, TSS_POLICY_USAGE, &hSRKPolicy);
+//    Debug("Get the SRK policy", result);
+//
+//    //Then set the SRK policy to be the well known secret
+//    result = Tspi_Policy_SetSecret(hSRKPolicy, TSS_SECRET_MODE_SHA1, 20, wks);
 
 
     //输出所有PCR寄存器内的值

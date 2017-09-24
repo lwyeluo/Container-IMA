@@ -1,7 +1,7 @@
 #!/bin/sh
 base_dir=$(cd $(dirname .) && pwd)
 code_dir=${base_dir}/linux-source-3.13.0
-obj_dir="/usr/src/linux-3.13-obj"
+obj_dir="/usr/src/linux-3.13-TContainer-obj"
 
 mkdir $obj_dir || true
 
