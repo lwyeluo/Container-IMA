@@ -185,10 +185,9 @@ your host.`,
                 hs := sha1.New()
                 hs.Write([]byte(recordStr))
                 hashHexString := fmt.Sprintf("%x", hs.Sum(nil))
-                hashString := fmt.Sprintf("%s", hs.Sum(nil))
                 
                 debugLog.Printf(">>> prepare to extend %s %s\n", recordStr, hashHexString)
-		err = extend(11, hashString, debugLog)
+		err = extend(11, hashHexString, debugLog)
 		//if err != nil {
 		//	debugLog.Println("failed to extend: " + err.Error())
 		//	return err

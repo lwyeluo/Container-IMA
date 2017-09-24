@@ -77,7 +77,7 @@ int main(int argc, char **argv)
     {  
         result = Tspi_TPM_PcrRead(hTPM, j, &ulPcrLen, &rgbPcrValue);  
         printf("PCR %02d ", j);  
-        for (i = 0; i < 19; i++)  
+        for (i = 0; i < 20; i++)  
             printf("%02x", *(rgbPcrValue + i));  
         printf("\n");  
     }  
@@ -127,7 +127,7 @@ int main(int argc, char **argv)
     {  
         result = Tspi_TPM_PcrRead(hTPM, j, &ulPcrLen, &rgbPcrValue);  
         printf("PCR %02d ", j);  
-        for (i = 0; i < 19; i++)  
+        for (i = 0; i < 20; i++)  
             printf("%02x", *(rgbPcrValue + i));  
         printf("\n");  
     }  
