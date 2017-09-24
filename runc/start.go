@@ -184,9 +184,10 @@ your host.`,
                 // calculate its' hash value
                 hs := sha1.New()
                 hs.Write([]byte(recordStr))
-                hashString := fmt.Sprintf("%x", hs.Sum(nil))
+                hashHexString := fmt.Sprintf("%x", hs.Sum(nil))
+                hashString := fmt.Sprintf("%s", hs.Sum(nil))
                 
-                debugLog.Printf(">>> prepare to extend %s %s\n", recordStr, hashString)
+                debugLog.Printf(">>> prepare to extend %s %s\n", recordStr, hashHexString)
 		err = extend(11, hashString, debugLog)
 		//if err != nil {
 		//	debugLog.Println("failed to extend: " + err.Error())
@@ -195,7 +196,7 @@ your host.`,
 
 		// record into ima
 		debugLog.Println(">>> prepare to record into ima ... ")
-		err = record(recordStr + " " + hashString)
+		err = record(recordStr + " " + hashHexString)
 		if err != nil {
 			debugLog.Println("failed to record: " + err.Error())
 			return err
