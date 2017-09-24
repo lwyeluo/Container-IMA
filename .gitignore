@@ -18,3 +18,4 @@ modules.order
 /runc/contrib/cmd/recvtty/recvtty
 /runc/man/man8
 /runc/release
+.idea/

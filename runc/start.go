@@ -36,8 +36,9 @@ func record(digest string) error {
 
 // @return:
 //	string: the digest of image
+//	string: config filename
 //	err
-func getDigest(id string, debugLog *log.Logger) (string, error) {
+func getDigest(id string, debugLog *log.Logger) (string, string, error) {
 
 	// load config file which includes the information of image
 	var dict map[string]interface{}
@@ -45,7 +46,7 @@ func getDigest(id string, debugLog *log.Logger) (string, error) {
 	data, err := io.ReadFile(configFileName)
 	if err != nil {
 		debugLog.Fatalln("cannot find image")
-		return "", err
+		return "", "", err
 	}
 
 	datajson := []byte(data)
@@ -61,7 +62,7 @@ func getDigest(id string, debugLog *log.Logger) (string, error) {
 		debugLog.Println(">> The image digest is: " + imageDigest)
 	}
 
-	return imageDigest, err
+	return imageDigest, configFileName, err
 }
 
 // @Args:
@@ -99,6 +100,7 @@ func extend(pcrIndex int, value string, debugLog *log.Logger) error {
 	//	return err
 	//}
 	debugLog.Printf("%s\n", output)
+	debugLog.Println(err)
 
 	return err
 }
@@ -160,7 +162,7 @@ your host.`,
 
 		// locate the digest of image
 		debugLog.Println(">>> prepare to get digest ... ")
-		imageDigest, err := getDigest(id, debugLog)
+		imageDigest, configFileName, err := getDigest(id, debugLog)
 		if err != nil {
 			debugLog.Println("failed to get digest: " + err.Error())
 			return err
@@ -177,9 +179,9 @@ your host.`,
 		}
 
 		// extend all
-		recordStr := id + " " + mntNum + " " + imageDigest
+		recordStr := id + " " + mntNum + " " + imageDigest + " " + configFileName
 		debugLog.Printf(">>> prepare to extend %s\n", recordStr)
-		err = extend(13, recordStr, debugLog)
+		err = extend(11, recordStr, debugLog)
 		//if err != nil {
 		//	debugLog.Println("failed to extend: " + err.Error())
 		//	return err
