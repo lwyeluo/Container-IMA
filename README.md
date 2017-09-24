@@ -4,22 +4,50 @@
 
 ### install docker (omit...)
 
+### build tpm tools
+
+- make sure you have a tpm chip, otherwise you should run a tpm-emulator[https://github.com/lwyeluo/tpm-emulator] for test. 
+
+```
+apt-get install libtspi-dev trousers
+cd tool/tpm-extend
+make
+make install
+
+cd ../show-pcr
+make
+make install
+```
+
 ### install our docker-run
 
 ```
 # export your GOPATH, for example
-root@moby:/usr/src/Trusted-Container/runc# cat /etc/profile | grep GOPATH
+root@TContainer:/usr/src/TContainer/runc# cat /etc/profile | grep GOPATH
 export GOPATH=/go/
 
 # our code for runc
 mkdir -p /go/src/github.com/opencontainers
 cd /go/src/github.com/opencontainers
 
-cp -rf /usr/src/Trusted-Container/runc .
+cp -rf /usr/src/TContainer/runc .
 
 # add dependencies
 apt-get install libseccomp-dev 
 apt-get install libapparmor-dev
+apt-get install golang-go
+
+# If the go version is too old, you can
+#   # mkdir /usr/local/go1.6
+#   #  wget https://storage.googleapis.com/golang/go1.6.linux-amd64.tar.gz
+#   # tar -xzvf go1.6.linux-amd64.tar.gz -C /usr/local/go1.6
+#   # vim /etc/profile
+#   #   export GOROOT=/usr/local/go1.6/go
+#   #   export GOBIN=$GOROOT/bin
+#   #   export GOPATH=/go/
+#   #   export PATH=$PATH:$GOBIN
+
+# go get github.com/coreos/go-tspi
 
 # make runc
 cd runc/
@@ -33,7 +61,7 @@ rm docker-runc
 ln -s /usr/local/sbin/runc  docker-runc
 
 # refer to our docker-runc
-root@moby:/usr/bin# ls -l | grep docker-runc
+root@TContainer:/usr/bin# ls -l | grep docker-runc
 lrwxrwxrwx 1 root root          20 9月   8 19:48 docker-runc -> /usr/local/sbin/runc
 -rwxr-xr-x 1 root root     8727368 9月   8 19:47 docker-runc.bak
 ```
@@ -41,11 +69,15 @@ lrwxrwxrwx 1 root root          20 9月   8 19:48 docker-runc -> /usr/local/sbin
 ### disable docker daemon
 
 ```
+# For ubuntu16.04
 systemctl disable docker.service
 
-root@moby:~# systemctl list-unit-files -t service | grep docker
+root@TContainer:~# systemctl list-unit-files -t service | grep docker
 docker.service                             disabled
-root@moby:~#
+root@TContainer:~#
+
+# For ubuntu14.04
+mv /etc/init/docker.conf ~
 ```
 
 ### compile and login our kernel (omit)
@@ -55,40 +87,70 @@ root@moby:~#
 - show ima
 
 ```
-root@moby:/sys/kernel/security/ima# ls
-ascii_runtime_measurements  binary_runtime_measurements  cpcr  kernel_module_measurements  runtime_measurements_count  violations
-root@moby:/sys/kernel/security/ima# head -n 5 *
+root@TContainer:~# cd /sys/kernel/security/ima/
+root@TContainer:/sys/kernel/security/ima# ls
+ascii_runtime_measurements   cpcr    runtime_measurements_count
+binary_runtime_measurements  policy  violations
+root@TContainer:/sys/kernel/security/ima# head -n 5 *
 ==> ascii_runtime_measurements <==
-10 1d8d532d463c9f8c205d0df7787669a85f93e260 ima-ng sha1:0000000000000000000000000000000000000000 boot_aggregate
-10 708c904047d025dfad5cf994a79972b6b8a9933b ima-ng sha1:ea635ede655b8364e93478ed2c998584b4e84ce7 4026531840:/sbin/init
-10 ee82a099d86d5f6a06867c4685c200a37be89828 ima-ng sha1:bc659d9e2cb30539f49d1a008b685971b4f1e1a3 4026531840:/lib/x86_64-linux-gnu/ld-2.23.so
-10 ebc240f17b95dbd69ec6d4b19601227a0b66a784 ima-ng sha1:2204529e85806a38b9b0077fdf18a002b5ad2069 4026531840:/lib/x86_64-linux-gnu/libselinux.so.1
-10 673230165c43b5dc1ab9f62f752b00217adde06b ima-ng sha1:e8e0d27fcea338497a86023d4a2d0905ffc2b96c 4026531840:/lib/x86_64-linux-gnu/libcap.so.2.24
+10 e024c261cccd18a9b80a42780875dc86e912a92d ima-ng sha1:3d94c4fa9ec4969d54202cfc92bfac20beacb3d7 boot_aggregate
+10 e43015028ff976aed9750d1d2a265fbf364ee771 ima-ng sha1:a5e65f1ca3a779cea954a015bde7ec5daa3f7612 4026531840:/init
+10 ee766354b07ac3c08bedc1a3053b9b3413726247 ima-ng sha1:dc3e621c72cde19593c42a7703e143fd3dad5320 4026531840:/bin/sh
+10 53f863d4c51370caf662e21324b9702366941821 ima-ng sha1:67c253d8ea7089253719cad7f952fb4c22240f27 4026531840:/lib64/ld-linux-x86-64.so.2
+10 00e6e868fb546be32b9811d785624692765b394e ima-ng sha1:fac553d7706114a2ed0ef587aaf48f58e19f381a 4026531840:/etc/ld.so.cache
 
 ==> binary_runtime_measurements <==
 
-??¡§_?ima-ng1sha1:boot_aggregate
-p@G¦´?\?????;ima-ng8sha1:ò¨?[dôé???4026531840:/sbin/init
-??_j|F?{Þ°ima-ngNsha1:?e,?9??hYq???4026531840:/lib/x86_64-linux-gnu/ld-2.23.so
-????¨³¡À"z
-        f¡ìima-ngSsha1:"Rj8????? i14026531840:/lib/x86_64-linux-gnu/libselinux.so.1
+�$�a����
+Bu܆��-ima-ng1sha1:=����Ė�T ,���� ���boot_aggregate
+*&_�6N�qima-ng3sha1:��_��yΩT����]�?v4026531840:/init
+�vcT�z������;�4rbGima-ng5sha1:�>br�ᕓ�*w�C�=�S 4026531840:/bin/sh
 
 ==> cpcr <==
-head: error reading 'cpcr': Too many levels of symbolic links
-
-==> kernel_module_measurements <==
-11 bbee1ac32ee8fae3b717c058f55f1845ba6b99db ima-ng sha1:deda712cad827ee929d307d907a40253f012230e 4026531840:/lib/modules/3.13.11-ckt39/kernel/fs/autofs4/autofs4.ko
-11 fd3048e35014b00de71bb79b6179f93147e668e1 ima-ng sha1:b647b3e6f64c294673d21d2131bbbafec25aa117 4026531840:/lib/modules/3.13.11-ckt39/kernel/drivers/parport/parport.ko
-11 477303ff7de4bca54eb0a67f71ff603a612d2346 ima-ng sha1:69c3773f62f621217063daf98f0df244cb8b3d38 4026531840:/lib/modules/3.13.11-ckt39/kernel/drivers/char/lp.ko
-11 6abed2753dfa4031f9122a13a457c62c8efa816f ima-ng sha1:4c82753983a3366732e9af22ddfc42fec7619413 4026531840:/lib/modules/3.13.11-ckt39/kernel/drivers/char/ppdev.ko
-11 b3f494e378d1f7cb28befd5440a723673c05b5f7 ima-ng sha1:bc2691857c711780166b8ce70bb20d8f439a8e19 4026531840:/lib/modules/3.13.11-ckt39/kernel/drivers/parport/parport_pc.ko
+head: error reading ‘cpcr’: Too many levels of symbolic links
+head: cannot open ‘policy’ for reading: Permission denied
 
 ==> runtime_measurements_count <==
-794
+3309
 
 ==> violations <==
-0
-root@moby:/sys/kernel/security/ima#
+5
+root@TContainer:/sys/kernel/security/ima#
+```
+
+- show pcr(if you have a hardware TPM)
+
+```
+root@TContainer:/sys/kernel/security/ima# show-pcr
+Create Context : Success
+Context Connect : Success
+Get TPM Handle : Success
+Get the SRK handle : Key not found in persistent storage
+Get the SRK policy : Invalid handle
+PCR 00 029641cb9943b654fea149a37a69c6887ed44e
+PCR 01 7d0af2df392eccac86f87a96cfebf6295cef75
+PCR 02 21bb7fb701c2aafea94826edc08a9da680a635
+PCR 03 b2a83b0ebf2f8374299a5b2bdfc31ea955ad72
+PCR 04 5278bd4b22544edf470f074eacb3d3603019da
+PCR 05 45a323382bd933f08e7f0e256bc8249e4095b1
+PCR 06 5647168983c894e7bbeff1aa3dfbde848f918f
+PCR 07 b2a83b0ebf2f8374299a5b2bdfc31ea955ad72
+PCR 08 00000000000000000000000000000000000000
+PCR 09 00000000000000000000000000000000000000
+PCR 10 e03c839e0d192a170dea16b3acb71d9dc5e598
+PCR 11 00000000000000000000000000000000000000
+PCR 12 00000000000000000000000000000000000000
+PCR 13 00000000000000000000000000000000000000
+PCR 14 00000000000000000000000000000000000000
+PCR 15 00000000000000000000000000000000000000
+PCR 16 00000000000000000000000000000000000000
+PCR 17 ffffffffffffffffffffffffffffffffffffff
+PCR 18 ffffffffffffffffffffffffffffffffffffff
+PCR 19 ffffffffffffffffffffffffffffffffffffff
+PCR 20 ffffffffffffffffffffffffffffffffffffff
+PCR 21 ffffffffffffffffffffffffffffffffffffff
+PCR 22 ffffffffffffffffffffffffffffffffffffff
+PCR 23 00000000000000000000000000000000000000
 ```
 
 - run docker daemon
@@ -97,65 +159,206 @@ root@moby:/sys/kernel/security/ima#
 unshare -m dockerd
 ```
 
-- all information of docker daemon has been recorded
+- all information of docker daemon has been recorded into file 4026532286, and cpcr and PCR12 has values
 
 ```
-root@moby:/sys/kernel/security/ima# ls
-4026532469  ascii_runtime_measurements  binary_runtime_measurements  cpcr  kernel_module_measurements  runtime_measurements_count  violations
-root@moby:/sys/kernel/security/ima# cat 4026532469
-4026532469 10a7e817ab08caedc66638e27d81006eb2fa2e1e ima-ng sha1:8bd883ec6e04713d4ff74c6180459c84402b8172 4026532469:/usr/bin/unshare
-4026532469 34286d7a18bbab66c9d6950f388fee2ea7f39a2a ima-ng sha1:b3003acb2054f9d1c0845eb2022d96f16c12f34b 4026532469:/usr/bin/dockerd
-4026532469 e6921b66bb0c97cf8e5f9ec5647b9611a07b12b8 ima-ng sha1:76e5b111d23adea7f6f221aaebfe83f58333d5b5 4026532469:/usr/bin/docker-containerd
-4026532469 212e2192b218ecf229377b2751ce1277daea30f3 ima-ng sha1:7b40d27ad4b7777df2298c7f1b406a9556d4516f 4026532469:/lib/modules/3.13.11-ckt39/kernel/ubuntu/aufs/aufs.ko
-4026532469 27f57fd024be758921e132b09cc5d906d36239e2 ima-ng sha1:1e84a7b6b7e72c069f94c14e010122478a02a54a 4026532469:/lib/modules/3.13.11-ckt39/kernel/net/llc/llc.ko
-4026532469 7f4b6147a2ac98321ccc0cff779c4ed47f0c209d ima-ng sha1:90337226892d174015250bcb0c7fd120e5e3bd3c 4026532469:/lib/modules/3.13.11-ckt39/kernel/net/802/stp.ko
-4026532469 af68abfee82a70e8bd0e0490ffab1bc0e5645247 ima-ng sha1:abcea61d0c39239adb476fc4414b619ac741b804 4026532469:/lib/modules/3.13.11-ckt39/kernel/net/bridge/bridge.ko
-4026532469 5e5b1c35b3a6a23d856db574eb4e8d1eb3903258 ima-ng sha1:90c882af0fef80f9bd7e0665868f913eec0e6fcb 4026532469:/lib/modules/3.13.11-ckt39/kernel/net/netfilter/nf_conntrack.ko
-4026532469 0078da79ec702f1a9b3f9a15ee1b7acd2ae1c90f ima-ng sha1:c57d7d3eaf7f4d35bac8c1e3885dda731af7a3d3 4026532469:/lib/modules/3.13.11-ckt39/kernel/net/netfilter/nf_nat.ko
-4026532469 e21783ef6f89c6b9908950b91ca4738e99383373 ima-ng sha1:e90dbe08b2080e67ea3b0fe95440b6aa7f81779a 4026532469:/lib/modules/3.13.11-ckt39/kernel/net/netfilter/x_tables.ko
-4026532469 56710141bd3d6e737b2ea268bd0ffbc4ab678522 ima-ng sha1:14d7316d627d3de0a4059830e5a7f0cd7f39bcde 4026532469:/lib/modules/3.13.11-ckt39/kernel/net/netfilter/xt_conntrack.ko
-4026532469 40fe3b62651b927569b61246dd19a8600547a34a ima-ng sha1:d8a94c405afa1eff7e171442f2db0cbc86ebb234 4026532469:/sbin/iptables
-4026532469 62813400bf85212372b37b39dffab1ad3353149d ima-ng sha1:a82627630c31dd2c6a7525bcab97ab29cbe0ebe3 4026532469:/lib/x86_64-linux-gnu/libip4tc.so.0.1.0
-4026532469 684d2b4522c29ce0ef4bd40074f31376346ffd5b ima-ng sha1:f559f66b59ee743a43bad9c6b5d1e2066138422f 4026532469:/lib/x86_64-linux-gnu/libip6tc.so.0.1.0
-4026532469 77c4f87309dd866bf18121b400cff127e0d281ac ima-ng sha1:9dd74deddf9d0f27c4649c851ea1160d79e27509 4026532469:/lib/x86_64-linux-gnu/libxtables.so.11.0.0
-4026532469 defe2bc938b18b93aa05b98a6bf5cc8637b258aa ima-ng sha1:3f668c447c0728179b423a116461db3a95d74a72 4026532469:/lib/modules/3.13.11-ckt39/kernel/net/ipv4/netfilter/ip_tables.ko
-4026532469 c21fa6422bed7a0ccafa68139aa1c9fb96c50f53 ima-ng sha1:67d2a08c0ad44b14c53538e0bff91dfdcc52be8b 4026532469:/lib/xtables/libxt_addrtype.so
-4026532469 1c8a69c9fd560ffa6437c563156c8fcea7e0ad10 ima-ng sha1:4b681cc3d0577c3feac182b1e0ee507786d1eb94 4026532469:/lib/xtables/libxt_standard.so
-4026532469 ae23fcc62f5aac6015eb63c158682cecea790540 ima-ng sha1:21de2ac08618738c1ac2ff76b0ebe738ac17dd09 4026532469:/lib/modules/3.13.11-ckt39/kernel/net/xfrm/xfrm_algo.ko
-4026532469 a48958410becee328ed03edf0346a59e534866a6 ima-ng sha1:4ce184053fe355a02ea4c848ecc52283205c0952 4026532469:/lib/modules/3.13.11-ckt39/kernel/net/xfrm/xfrm_user.ko
-4026532469 a6c65eaf43bf2fc64659291e3df33bda77a630ff ima-ng sha1:4d873040b6d191a58234f022fdcfa99a598dc04b 4026532469:/lib/modules/3.13.11-ckt39/kernel/net/netfilter/nfnetlink.ko
-4026532469 032479654b0b322d4b9fd5854b0f8eb39bdd2ee1 ima-ng sha1:d11621496920d3e2c59ad06455f79d8d7fabdb23 4026532469:/lib/modules/3.13.11-ckt39/kernel/net/netfilter/nf_conntrack_netlink.ko
-4026532469 de17e14560bc130613e3dd23b7bae69aaf5411fd ima-ng sha1:cea10776418c6170076aa4dbdfc68dcee368656e 4026532469:/lib/xtables/libipt_MASQUERADE.so
-4026532469 e13053436640b950002aa32497c67b79b1635190 ima-ng sha1:db1c209efb1738654a7f68e515536e2d5f817325 4026532469:/lib/xtables/libxt_conntrack.so
-4026532469 4258b615408f3ac9cbe87b83cada823b2743805a ima-ng sha1:9d51706a3fe0d5ced57537c80da6075cab9ab2ee 4026532469:/usr/bin/docker-runc
-4026532469 0e15dffeb2a12dbe64ea19b715da9de745df852d ima-ng sha1:ee0e918c05bdc39bf48ddf973fc88695df728b28 4026532469:/usr/bin/docker-init
-root@moby:/sys/kernel/security/ima#
+root@TContainer:/sys/kernel/security/ima# ls
+4026532286                   cpcr                        violations
+ascii_runtime_measurements   policy
+binary_runtime_measurements  runtime_measurements_count
+root@TContainer:/sys/kernel/security/ima# head -n 5 *
+==> 4026532286 <==
+4026532286 1f03d59cbee6529aed5c563fc1a14b0050b37554 ima-ng sha1:38919a201521117fb8bf907ab5d41bb31eb29a39 2529->2518->2115->1639->1422->1177->1->0_4026532286:/usr/bin/unshare
+4026532286 b9d85d3f55bcde0907488e074aab00d39d865154 ima-ng sha1:3b16665afb276378ad2368fab581106e563b74da 4026532286:/usr/bin/dockerd
+4026532286 b23dacc13743c81a236716c19156e2ed59002bf8 ima-ng sha1:80a5ea753fe06e9ecc8f5bdf857d4af9d8aef39b 4026532286:/usr/bin/docker-containerd
+4026532286 100d8fba5b238c01f60db3ff078880e2e16a7dba ima-ng sha1:126ee56dd59433f8a488cf873d0fe6fea2c3f91a 4026532286:/var/lib/docker/tmp/docker-default111928052
+4026532286 eb59235b278225a90b1fe9a84a5bbcc1fee7bba0 ima-ng sha1:64acb36cdf684d68843913771b89004227c3b5f3 4026532286:/lib/modules/3.13.11-ckt39/kernel/ubuntu/aufs/aufs.ko
+
+==> ascii_runtime_measurements <==
+10 e024c261cccd18a9b80a42780875dc86e912a92d ima-ng sha1:3d94c4fa9ec4969d54202cfc92bfac20beacb3d7 boot_aggregate
+10 e43015028ff976aed9750d1d2a265fbf364ee771 ima-ng sha1:a5e65f1ca3a779cea954a015bde7ec5daa3f7612 4026531840:/init
+10 ee766354b07ac3c08bedc1a3053b9b3413726247 ima-ng sha1:dc3e621c72cde19593c42a7703e143fd3dad5320 4026531840:/bin/sh
+10 53f863d4c51370caf662e21324b9702366941821 ima-ng sha1:67c253d8ea7089253719cad7f952fb4c22240f27 4026531840:/lib64/ld-linux-x86-64.so.2
+10 00e6e868fb546be32b9811d785624692765b394e ima-ng sha1:fac553d7706114a2ed0ef587aaf48f58e19f381a 4026531840:/etc/ld.so.cache
+
+==> binary_runtime_measurements <==
+
+�$�a����
+Bu܆��-ima-ng1sha1:=����Ė�T ,���� ���boot_aggregate
+*&_�6N�qima-ng3sha1:��_��yΩT����]�?v4026531840:/init
+�vcT�z������;�4rbGima-ng5sha1:�>br�ᕓ�*w�C�=�S 4026531840:/bin/sh
+
+==> cpcr <==
+history 3748c62f0ce61151ce10a5926142c6e6e8d54938
+4026532286 700409a7af8b3093d6c3cbcd01d171774d32896b
+head: cannot open ‘policy’ for reading: Permission denied
+
+==> runtime_measurements_count <==
+3522
+
+==> violations <==
+6
+root@TContainer:/sys/kernel/security/ima# show-pcr
+Create Context : Success
+Context Connect : Success
+Get TPM Handle : Success
+Get the SRK handle : Key not found in persistent storage
+Get the SRK policy : Invalid handle
+PCR 00 029641cb9943b654fea149a37a69c6887ed44e
+PCR 01 7d0af2df392eccac86f87a96cfebf6295cef75
+PCR 02 21bb7fb701c2aafea94826edc08a9da680a635
+PCR 03 b2a83b0ebf2f8374299a5b2bdfc31ea955ad72
+PCR 04 5278bd4b22544edf470f074eacb3d3603019da
+PCR 05 45a323382bd933f08e7f0e256bc8249e4095b1
+PCR 06 5647168983c894e7bbeff1aa3dfbde848f918f
+PCR 07 b2a83b0ebf2f8374299a5b2bdfc31ea955ad72
+PCR 08 00000000000000000000000000000000000000
+PCR 09 00000000000000000000000000000000000000
+PCR 10 8157d83dc87c094e610e121507cc2e5a90688a
+PCR 11 00000000000000000000000000000000000000
+PCR 12 dd811745250acef5e38667743367897c8f5ce7
+PCR 13 00000000000000000000000000000000000000
+PCR 14 00000000000000000000000000000000000000
+PCR 15 00000000000000000000000000000000000000
+PCR 16 00000000000000000000000000000000000000
+PCR 17 ffffffffffffffffffffffffffffffffffffff
+PCR 18 ffffffffffffffffffffffffffffffffffffff
+PCR 19 ffffffffffffffffffffffffffffffffffffff
+PCR 20 ffffffffffffffffffffffffffffffffffffff
+PCR 21 ffffffffffffffffffffffffffffffffffffff
+PCR 22 ffffffffffffffffffffffffffffffffffffff
+PCR 23 00000000000000000000000000000000000000
 ```
 
 - run a container
 
 ```
-root@moby:~# docker run -ti ubuntu:16.04
+root@TContainer:~# docker run -ti ubuntu:16.04
 root@b00b2dcd8b74:/#
 ```
 
-- information of this container has been recorded
+- information of this container has been recorded into 4026532295, and cpcr and PCR11 has values
 
 ```
-root@moby:/sys/kernel/security/ima# ls
-4026532469  4026532481  ascii_runtime_measurements  binary_runtime_measurements  cpcr  kernel_module_measurements  runtime_measurements_count  violations
-root@moby:/sys/kernel/security/ima# cat 4026532481
-4026532481 4b80269ef25931488b065b999d2462eefd2cfc40 ima-ng sha1:9d51706a3fe0d5ced57537c80da6075cab9ab2ee 4026532481:/usr/bin/docker-runc
-4026532481 c889f1ef372a4d6ac7271618c52d47437b6c0533 ima-ng sha1:611a59c515074dbb376713fd19040c10a0c8e5e2 4026532481:/bin/bash
-4026532481 8cea4c0e5b44e2c07f84ae6611625425ab8ed7b1 ima-ng sha1:bc659d9e2cb30539f49d1a008b685971b4f1e1a3 4026532481:/lib/x86_64-linux-gnu/ld-2.23.so
-4026532481 815b835ca1fca565c8fda1229e105d015c02df8b ima-ng sha1:2bd9389f52439de7a42efcb8a3c3f8d4c881e8b2 4026532481:/lib/x86_64-linux-gnu/libtinfo.so.5.9
-4026532481 7f30860f25acc1331373196de4482cc2a7d39e5b ima-ng sha1:a0a3f1428cd99e8646532ad1991f1f75631416b6 4026532481:/lib/x86_64-linux-gnu/libdl-2.23.so
-4026532481 087de18ffc3d5d7d530f243801b3ec859457c56d ima-ng sha1:14c22be9aa11316f89909e4237314e009da38883 4026532481:/lib/x86_64-linux-gnu/libc-2.23.so
-4026532481 927eaeb75073906ff806df200f6918c8a5567201 ima-ng sha1:747b3c4af6c2ed287d12d223fc9f1b5c3192eb34 4026532481:/lib/x86_64-linux-gnu/libnss_compat-2.23.so
-4026532481 faa759df015e451163aac493dacce4d5d73759d5 ima-ng sha1:42e4fc53b2b73cc5f40c601ae3cace035c8fda9d 4026532481:/lib/x86_64-linux-gnu/libnsl-2.23.so
-4026532481 056d55291c93a96a0e8eb8207a479c2480374305 ima-ng sha1:b5d30795e252df782a605ad6c2155805f0a6e94b 4026532481:/lib/x86_64-linux-gnu/libnss_nis-2.23.so
-4026532481 f8f4aa07fa8cf560997e0ce6877c1d0710631825 ima-ng sha1:5cd2b270c29b368e1183a9c530c662483a49c703 4026532481:/lib/x86_64-linux-gnu/libnss_files-2.23.so
-4026532481 a9bd82871ebb7c27bd013648657bba706c549d62 ima-ng sha1:00d1beed62bdd61647ee8548ad3d1f6bd2bf6621 4026532481:/usr/bin/groups
-4026532481 e36d9a62fe473595f2b3661021f5adaf8b035926 ima-ng sha1:3c2f00e9ebf51520b63dda65f2c369fd4d3b90a9 4026532481:/usr/bin/dircolors
-root@moby:/sys/kernel/security/ima#
+root@TContainer:/sys/kernel/security/ima# ls
+4026532286  ascii_runtime_measurements   cpcr    runtime_measurements_count
+4026532295  binary_runtime_measurements  policy  violations
+root@TContainer:/sys/kernel/security/ima# head -n 5 *
+==> 4026532286 <==
+4026532286 1f03d59cbee6529aed5c563fc1a14b0050b37554 ima-ng sha1:38919a201521117fb8bf907ab5d41bb31eb29a39 2529->2518->2115->1639->1422->1177->1->0_4026532286:/usr/bin/unshare
+4026532286 b9d85d3f55bcde0907488e074aab00d39d865154 ima-ng sha1:3b16665afb276378ad2368fab581106e563b74da 4026532286:/usr/bin/dockerd
+4026532286 b23dacc13743c81a236716c19156e2ed59002bf8 ima-ng sha1:80a5ea753fe06e9ecc8f5bdf857d4af9d8aef39b 4026532286:/usr/bin/docker-containerd
+4026532286 100d8fba5b238c01f60db3ff078880e2e16a7dba ima-ng sha1:126ee56dd59433f8a488cf873d0fe6fea2c3f91a 4026532286:/var/lib/docker/tmp/docker-default111928052
+4026532286 eb59235b278225a90b1fe9a84a5bbcc1fee7bba0 ima-ng sha1:64acb36cdf684d68843913771b89004227c3b5f3 4026532286:/lib/modules/3.13.11-ckt39/kernel/ubuntu/aufs/aufs.ko
+
+==> 4026532295 <==
+4026532295 b071932c6febc9250a39702b037b373e5ea3b391 ima-ng sha1:4f77d7f50160b4153ec183bd1fe8d9a1736386eb 2761->2756->2750->2538->2529->2518->2115->1639->1422->1177->1->0_4026532295:/usr/local/sbin/runc
+4026532295 0dcda56b3285d291e0a6f8e6ddfcf4450238b748 ima-ng sha1:611a59c515074dbb376713fd19040c10a0c8e5e2 4026532295:/bin/bash
+4026532295 04190a7c917965a1aeb15bf2653a643e2a24cbf8 ima-ng sha1:bc659d9e2cb30539f49d1a008b685971b4f1e1a3 4026532295:/lib/x86_64-linux-gnu/ld-2.23.so
+4026532295 59bd39953815ef17a7cd6522df16b90ecdb3f206 ima-ng sha1:eaae87c3d507be4634db12ab562c9f1cb243e764 4026532295:/etc/ld.so.cache
+4026532295 4afdaf7ab7754f3f75457d75ed9814c43544a452 ima-ng sha1:2bd9389f52439de7a42efcb8a3c3f8d4c881e8b2 4026532295:/lib/x86_64-linux-gnu/libtinfo.so.5.9
+
+==> ascii_runtime_measurements <==
+10 e024c261cccd18a9b80a42780875dc86e912a92d ima-ng sha1:3d94c4fa9ec4969d54202cfc92bfac20beacb3d7 boot_aggregate
+10 e43015028ff976aed9750d1d2a265fbf364ee771 ima-ng sha1:a5e65f1ca3a779cea954a015bde7ec5daa3f7612 4026531840:/init
+10 ee766354b07ac3c08bedc1a3053b9b3413726247 ima-ng sha1:dc3e621c72cde19593c42a7703e143fd3dad5320 4026531840:/bin/sh
+10 53f863d4c51370caf662e21324b9702366941821 ima-ng sha1:67c253d8ea7089253719cad7f952fb4c22240f27 4026531840:/lib64/ld-linux-x86-64.so.2
+10 00e6e868fb546be32b9811d785624692765b394e ima-ng sha1:fac553d7706114a2ed0ef587aaf48f58e19f381a 4026531840:/etc/ld.so.cache
+
+==> binary_runtime_measurements <==
+
+�$�a����
+Bu܆��-ima-ng1sha1:=����Ė�T ,���� ���boot_aggregate
+*&_�6N�qima-ng3sha1:��_��yΩT����]�?v4026531840:/init
+�vcT�z������;�4rbGima-ng5sha1:�>br�ᕓ�*w�C�=�S 4026531840:/bin/sh
+
+==> cpcr <==
+history 14e02a2c3157b082a8316719ac904413735fd22c
+4026532286 c40325915ee0230d1e35da8b047d516b14b5136e
+4026532295 c0db868b8e6c66ed1c4966149cff4a1813c59183
+head: cannot open ‘policy’ for reading: Permission denied
+
+==> runtime_measurements_count <==
+3570
+
+==> violations <==
+6
+root@TContainer:/sys/kernel/security/ima# show-pcr
+Create Context : Success
+Context Connect : Success
+Get TPM Handle : Success
+Get the SRK handle : Key not found in persistent storage
+Get the SRK policy : Invalid handle
+PCR 00 029641cb9943b654fea149a37a69c6887ed44e
+PCR 01 7d0af2df392eccac86f87a96cfebf6295cef75
+PCR 02 21bb7fb701c2aafea94826edc08a9da680a635
+PCR 03 b2a83b0ebf2f8374299a5b2bdfc31ea955ad72
+PCR 04 5278bd4b22544edf470f074eacb3d3603019da
+PCR 05 45a323382bd933f08e7f0e256bc8249e4095b1
+PCR 06 5647168983c894e7bbeff1aa3dfbde848f918f
+PCR 07 b2a83b0ebf2f8374299a5b2bdfc31ea955ad72
+PCR 08 00000000000000000000000000000000000000
+PCR 09 00000000000000000000000000000000000000
+PCR 10 17d92b15575afb73c7d6f35bdc6bc09dcf57de
+PCR 11 69af9eff5afdf33db002457ffdba8fe23b58d4
+PCR 12 8cb42e6861c4d180a326ab5862ac2bf2b08b62
+PCR 13 00000000000000000000000000000000000000
+PCR 14 00000000000000000000000000000000000000
+PCR 15 00000000000000000000000000000000000000
+PCR 16 00000000000000000000000000000000000000
+PCR 17 ffffffffffffffffffffffffffffffffffffff
+PCR 18 ffffffffffffffffffffffffffffffffffffff
+PCR 19 ffffffffffffffffffffffffffffffffffffff
+PCR 20 ffffffffffffffffffffffffffffffffffffff
+PCR 21 ffffffffffffffffffffffffffffffffffffff
+PCR 22 ffffffffffffffffffffffffffffffffffffff
+PCR 23 00000000000000000000000000000000000000
+```
+
+- the boot time of container is recorded in `/var/log/docker-boot.log`
+
+```
+root@TContainer:/sys/kernel/security/ima# cat /var/log/docker-boot.log 
+
+"867fa470d6594c3295f2ea5d24744c6dcb5d37b50dfde9034f19ecd63c3c8b2e [4026532295] sha256:8b72bba4485f1004e8378bc6bc42775f8d4fb851c750c6c0329d3770b3a09086 /var/lib/docker/containers/867fa470d6594c3295f2ea5d24744c6dcb5d37b50dfde9034f19ecd63c3c8b2e/config.v2.json" 2cbdc1963fff33bbb74f554681d563fa7063468e
+```
+
+- validate cpcr against PCR12
+
+```
+## ==> cpcr <==
+##  history 14e02a2c3157b082a8316719ac904413735fd22c
+##  4026532286 c40325915ee0230d1e35da8b047d516b14b5136e
+##  4026532295 c0db868b8e6c66ed1c4966149cff4a1813c59183
+
+##  PCR 12 8cb42e6861c4d180a326ab5862ac2bf2b08b62
+
+>>> import hashlib
+>>> sha1 = hashlib.sha1()
+>>> sha1.update(bytes.fromhex("c40325915ee0230d1e35da8b047d516b14b5136e"))
+>>> sha1.update(bytes.fromhex("c0db868b8e6c66ed1c4966149cff4a1813c59183"))
+>>> tempDigest = sha1.hexdigest()
+>>> sha1 = hashlib.sha1()
+>>> sha1.update(bytes.fromhex("14e02a2c3157b082a8316719ac904413735fd22c"))
+>>> sha1.update(bytes.fromhex(tempDigest))
+>>> print(sha1.hexdigest())
+8cb42e6861c4d180a326ab5862ac2bf2b08b623a
+```
+
+- validate boot time against PCR11
+
+```
+# entry in /var/log/docker-boot.log：
+#   2cbdc1963fff33bbb74f554681d563fa7063468e
+# pcr11：
+#   PCR 11 69af9eff5afdf33db002457ffdba8fe23b58d4
+
+>>> import hashlib
+>>> sha1 = hashlib.sha1()
+>>> calc_pcr = bytes.fromhex("0"*40)
+>>> sha1.update(calc_pcr)
+>>> sha1.update(bytes.fromhex("2cbdc1963fff33bbb74f554681d563fa7063468e"))
+>>> print(sha1.hexdigest())
+69af9eff5afdf33db002457ffdba8fe23b58d4b5
+>>>
 ```
