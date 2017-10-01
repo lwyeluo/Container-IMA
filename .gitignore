@@ -13,6 +13,8 @@ modules.order
 *.ko
 *.ko.cmd
 *.o.cmd
+*.swp
+*.swo
 /runc/vendor/pkg
 /runc//runc
 /runc/contrib/cmd/recvtty/recvtty
