@@ -34,7 +34,7 @@ func benchmarkContainerStart(d *helpers.DockerHelper) {
 			"routine": routine,
 		})
 		helpers.LogLabels("qps", "cps")
-		for _, q := range cfg["qps"].([]float64) {
+		for _, q := range cfg["qps"].([qpsLen]float64) {
 			start := time.Now()
 			latencies := d.DoParallelContainerStartBenchmark(q, period, routine)
 			cps := float64(len(latencies)) / time.Now().Sub(start).Seconds()

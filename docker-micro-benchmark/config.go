@@ -32,11 +32,12 @@ const (
 	longTestPeriod  = 50 * time.Second
 )
 
-var qpsLen = 50
+const qpsLen = 50
+var QPS [qpsLen]float64
 
 // For container start benchmark
 var containerOpConfig = map[string]interface{}{
-	"qps": [qpsLen]float64{},
+	"qps": QPS,
 	"routine": 100,
 	"period":  longTestPeriod,
 }

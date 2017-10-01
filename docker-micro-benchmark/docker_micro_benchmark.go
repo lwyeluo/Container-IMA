@@ -34,13 +34,15 @@ func main() {
 	}
 	client, _ := docker.NewClient(endpoint, apiVersion, nil, nil)
 	d := helpers.NewDockerHelper(client)
-	d.PullTestImage()
+	//d.PullTestImage()
 
 	// update qps
 	cfg := containerOpConfig
-	for i := 1; i <= 50; i ++ {
-		cfg["qps"] = i
+        var qps [qpsLen]float64
+	for i := 1; i <= qpsLen; i ++ {
+		qps[i - 1] = float64(i)
 	}
+        cfg["qps"] = qps
 
 	switch os.Args[1] {
 	case "-o":
