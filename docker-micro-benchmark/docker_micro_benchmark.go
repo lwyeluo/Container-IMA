@@ -35,6 +35,13 @@ func main() {
 	client, _ := docker.NewClient(endpoint, apiVersion, nil, nil)
 	d := helpers.NewDockerHelper(client)
 	d.PullTestImage()
+
+	// update qps
+	cfg := containerOpConfig
+	for i := 1; i <= 50; i ++ {
+		cfg["qps"] = i
+	}
+
 	switch os.Args[1] {
 	case "-o":
 		benchmarkContainerStart(d)
