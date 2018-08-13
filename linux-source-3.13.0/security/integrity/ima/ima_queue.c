@@ -204,6 +204,19 @@ static int ima_pcr_extend(int index, const u8 *hash) {
 	return result;
 }
 
+static int ima_get_random(u8 *out, size_t max) {
+	int result = 0;
+
+	if (!ima_used_chip)
+		return result;
+
+	result = tpm_get_random(TPM_ANY_NUM, out, max);
+	if (result != 0)
+		pr_err("IMA: Error Communicating to TPM chip, result: %d\n",
+			   result);
+	return result;
+}
+
 static int ima_pcr_read(int index, u8 *value) {
 	int result = 0;
 
@@ -225,42 +238,42 @@ static int ima_cpcr_bind(void) {
 	int i;
 	int rc = 0;
 
-	struct {
-		struct shash_desc shash;
-		char ctx[crypto_shash_descsize(cpcr_for_history.tfm)];
-	} desc;
-
-	desc.shash.tfm = cpcr_for_history.tfm;
-	desc.shash.flags = 0;
-
-	rc = crypto_shash_init(&desc.shash);
-	if (rc != 0)
-		return rc;
-
 	printk("[Wu Luo] prepared to bind cpcr to pcr\n");
 
 	rc = ima_pcr_read(CONFIG_IMA_CPCR_BIND_PCR_IDX, cpcr_for_history.data);
-	printk(">>> current pcr[%d] value is: ", CONFIG_IMA_CPCR_BIND_PCR_IDX);
+//	printk(">>> current pcr[%d] value is: ", CONFIG_IMA_CPCR_BIND_PCR_IDX);
+//	for (i = 0; i < 20; i++) {
+//		printk( "%02x\t", cpcr_for_history.data[i]);
+//	}
+//	printk("\n");
+
+	// collect all cPCRs
+	rc = ima_get_random(digest, CPCR_DATA_SIZE);
+	if (rc <= 0) {
+		printk("[Wu Luo] get random failed, we directly return\n");
+		return rc;
+	}
+	memcpy(cpcr_for_nonce.data, digest, CPCR_DATA_SIZE);
+	printk(">>> current nonce is: ");
 	for (i = 0; i < 20; i++) {
-		printk( "%02x\t", cpcr_for_history.data[i]);
+		printk( "%02x\t", cpcr_for_nonce.data[i]);
 	}
 	printk("\n");
 
-	// collect all cPCRs
 	rcu_read_lock();
 	list_for_each_entry_rcu(qe, &mnt_ns_list.list, list) {
-		rc = crypto_shash_update(&desc.shash, qe->cpcr->data, CPCR_DATA_SIZE);
+		for(i = 0; i < CPCR_DATA_SIZE; i ++) {
+			digest[i] = digest[i] ^ qe->cpcr->data[i];
+		}
 	}
 	rcu_read_unlock();
-
-	crypto_shash_final(&desc.shash, digest);
 
 	printk("[Wu Luo] successfully calculate the digest of cPCRs\n");
 
 	// extend the digest into physical PCR
 	rc = ima_pcr_extend(CONFIG_IMA_CPCR_BIND_PCR_IDX, digest);
 
-	printk(">>> the digest of all cpcrs value is: ");
+	printk(">>> the xor value of all cpcrs value is: ");
 	for (i = 0; i < 20; i++) {
 		printk( "%02x\t", digest[i]);
 	}

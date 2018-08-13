@@ -2,6 +2,8 @@
 
 ## Quick Start
 
+### compile and login our kernel (omit)
+
 ### install docker (omit...)
 
 ### build tpm tools
@@ -80,7 +82,8 @@ root@TContainer:~#
 mv /etc/init/docker.conf ~
 ```
 
-### compile and login our kernel (omit)
+### reboot
+
 
 ### test
 

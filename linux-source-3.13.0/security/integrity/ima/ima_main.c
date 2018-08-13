@@ -41,6 +41,10 @@ struct mnt_namespace_list mnt_ns_list;
  *  a physical PCR, i.e. PCR12
  */
 struct cPCR cpcr_for_history;
+/*
+ * record the current nonce
+ */
+struct cPCR cpcr_for_nonce;
 
 int ima_initialized;
 
@@ -483,7 +487,7 @@ int ima_record_task_for_ns(unsigned int mnt_ns_num) {
  	printk("[Wu Luo] create a new namespace<proc_inum>[%u]!\n", mnt_ns_num);
 
  	// check whether the systemd creates this namespace, we should ignore that
- 	if (!strcmp(current->real_parent->comm, "systemd")) {
+ 	if (!strncmp(current->real_parent->comm, "systemd", strlen("systemd"))) {
  		printk("[Wu Luo] systemd creates a new mnt namespace, "
  				"we ignore it. %s<--->%s\n",
 				current->comm, current->real_parent->comm);
@@ -582,6 +586,8 @@ int __init ima_init_cpcr_structures(void) {
 	}
 
 	memset(cpcr_for_history.data, 0x00, CPCR_DATA_SIZE);
+
+	memset(cpcr_for_nonce.data, 0x00, CPCR_DATA_SIZE);
 
 	return 0;
 }

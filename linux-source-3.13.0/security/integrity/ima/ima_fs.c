@@ -565,6 +565,11 @@ static void *ima_cpcr_measurements_start(struct seq_file *m, loff_t *pos)
 		seq_printf(m, "%02x", cpcr_for_history.data[i]);
 	}
 	seq_puts(m, "\n");
+	seq_puts(m, "nonce ");
+	for (i = 0; i < CPCR_DATA_SIZE; i ++) {
+		seq_printf(m, "%02x", cpcr_for_nonce.data[i]);
+	}
+	seq_puts(m, "\n");
 
 	list_for_each_entry_rcu(qe, &mnt_ns_list.list, list) {
 		if (!l--) {

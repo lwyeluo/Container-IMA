@@ -143,6 +143,10 @@ struct mnt_namespace_list *ima_lookup_namespace_entry(unsigned int proc_inum);
  *  a physical PCR, i.e. PCR12
  */
 extern struct cPCR cpcr_for_history;
+/*
+ * record the current nonce
+ */
+extern struct cPCR cpcr_for_nonce;
 
 int ima_init_cpcr_structures(void);
 
