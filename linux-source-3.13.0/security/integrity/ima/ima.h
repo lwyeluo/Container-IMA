@@ -95,6 +95,7 @@ struct ima_queue_entry {
 struct cPCR {
 	struct crypto_shash *tfm;
     unsigned char data[CPCR_DATA_SIZE];
+    unsigned char secret[CPCR_DATA_SIZE];
 };
 
 /* list of all measurements */
@@ -143,10 +144,6 @@ struct mnt_namespace_list *ima_lookup_namespace_entry(unsigned int proc_inum);
  *  a physical PCR, i.e. PCR12
  */
 extern struct cPCR cpcr_for_history;
-/*
- * record the current nonce
- */
-extern struct cPCR cpcr_for_nonce;
 
 int ima_init_cpcr_structures(void);
 

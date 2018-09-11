@@ -15,14 +15,14 @@ if [ $? -ne 0 ]; then
 	exit 1
 fi
 
-make -j4 O=$obj_dir
+make -j8 O=$obj_dir
 
 if [ $? -ne 0 ]; then
 	echo "[INFO] make menuconfig failed"
 	exit 1
 fi
 
-make modules_install O=$obj_dir
+make -j8 modules_install O=$obj_dir
 
 if [ $? -ne 0 ]; then
 	echo "[INFO] make menuconfig failed"

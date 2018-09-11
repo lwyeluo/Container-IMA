@@ -41,10 +41,6 @@ struct mnt_namespace_list mnt_ns_list;
  *  a physical PCR, i.e. PCR12
  */
 struct cPCR cpcr_for_history;
-/*
- * record the current nonce
- */
-struct cPCR cpcr_for_nonce;
 
 int ima_initialized;
 
@@ -466,6 +462,19 @@ int ima_record_task_for_ns(unsigned int mnt_ns_num) {
 	return 0;
 }
 
+int ima_get_random(u8 *out, size_t max) {
+	int result = 0;
+
+	if (!ima_used_chip)
+		return result;
+
+	result = tpm_get_random(TPM_ANY_NUM, out, max);
+	if (result < 0)
+		pr_err("IMA: Error Communicating to TPM chip, result: %d\n",
+			   result);
+	return result;
+}
+
 /*
  * ima_create_namespace - based on Trusted-Container.
  * @pid_ns: pointer to the pid namespace to be created
@@ -521,6 +530,14 @@ int ima_record_task_for_ns(unsigned int mnt_ns_num) {
 	}
 
 	memset(node->cpcr->data, 0x00, CPCR_DATA_SIZE);
+	memset(node->cpcr->secret, 0x00, CPCR_DATA_SIZE);
+
+	// generate secret for this cPCR
+	rc = ima_get_random(node->cpcr->secret, CPCR_DATA_SIZE);
+	if (rc <= 0) {
+		printk("[Wu Luo] get random failed, we directly return\n");
+		return rc;
+	}
 
 	node->proc_inum = mnt_ns_num;
 
@@ -580,14 +597,11 @@ int __init ima_init_cpcr_structures(void) {
 	cpcr_for_history.tfm = crypto_alloc_shash("sha1", 0, CRYPTO_ALG_ASYNC);
 	if (IS_ERR(cpcr_for_history.tfm)) {
 		rc = PTR_ERR(cpcr_for_history.tfm);
-		printk("[Wu Luo] ERROR: Can not allocate tfm (reason: %d)\n",
-			   "sha1", rc);
+		printk("[Wu Luo] ERROR: Can not allocate tfm (reason: %d)\n", rc);
 		return -1;
 	}
 
 	memset(cpcr_for_history.data, 0x00, CPCR_DATA_SIZE);
-
-	memset(cpcr_for_nonce.data, 0x00, CPCR_DATA_SIZE);
 
 	return 0;
 }
