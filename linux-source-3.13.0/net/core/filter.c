@@ -39,6 +39,7 @@
 #include <linux/ratelimit.h>
 #include <linux/seccomp.h>
 #include <linux/if_vlan.h>
+#include <linux/nospec.h>
 
 /* No hurry in this branch
  *
@@ -67,9 +68,10 @@ static inline void *load_pointer(const struct sk_buff *skb, int k,
 }
 
 /**
- *	sk_filter - run a packet through a socket filter
+ *	sk_filter_trim_cap - run a packet through a socket filter
  *	@sk: sock associated with &sk_buff
  *	@skb: buffer to filter
+ *	@cap: limit on how short the eBPF program may trim the packet
  *
  * Run the filter code and then cut skb->data to correct size returned by
  * sk_run_filter. If pkt_len is 0 we toss packet. If skb->len is smaller
@@ -78,7 +80,7 @@ static inline void *load_pointer(const struct sk_buff *skb, int k,
  * be accepted or -EPERM if the packet should be tossed.
  *
  */
-int sk_filter(struct sock *sk, struct sk_buff *skb)
+int sk_filter_trim_cap(struct sock *sk, struct sk_buff *skb, unsigned int cap)
 {
 	int err;
 	struct sk_filter *filter;
@@ -100,13 +102,13 @@ int sk_filter(struct sock *sk, struct sk_buff *skb)
 	if (filter) {
 		unsigned int pkt_len = SK_RUN_FILTER(filter, skb);
 
-		err = pkt_len ? pskb_trim(skb, pkt_len) : -EPERM;
+		err = pkt_len ? pskb_trim(skb, max(cap, pkt_len)) : -EPERM;
 	}
 	rcu_read_unlock();
 
 	return err;
 }
-EXPORT_SYMBOL(sk_filter);
+EXPORT_SYMBOL(sk_filter_trim_cap);
 
 /**
  *	sk_run_filter - run a filter on a socket
@@ -292,9 +294,11 @@ load_b:
 			X = K;
 			continue;
 		case BPF_S_LD_MEM:
+			barrier_nospec();
 			A = mem[K];
 			continue;
 		case BPF_S_LDX_MEM:
+			barrier_nospec();
 			X = mem[K];
 			continue;
 		case BPF_S_MISC_TAX:

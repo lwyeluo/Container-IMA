@@ -6,7 +6,6 @@
 #ifdef CONFIG_EFI
 extern void efi_init(void);
 extern void efi_idmap_init(void);
-extern unsigned long arm64_efi_facility;
 #else
 #define efi_init()
 #define efi_idmap_init()

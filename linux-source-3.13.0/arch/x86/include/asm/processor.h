@@ -72,7 +72,6 @@ extern u16 __read_mostly tlb_lli_4m[NR_INFO];
 extern u16 __read_mostly tlb_lld_4k[NR_INFO];
 extern u16 __read_mostly tlb_lld_2m[NR_INFO];
 extern u16 __read_mostly tlb_lld_4m[NR_INFO];
-extern s8  __read_mostly tlb_flushall_shift;
 
 /*
  *  CPU type and hardware bug flags. Kept separately for each CPU.
@@ -121,6 +120,8 @@ struct cpuinfo_x86 {
 	u16			booted_cores;
 	/* Physical processor id: */
 	u16			phys_proc_id;
+	/* Logical processor id: */
+	u16			logical_proc_id;
 	/* Core id: */
 	u16			cpu_core_id;
 	/* Compute unit id */
@@ -148,8 +149,8 @@ extern struct cpuinfo_x86	boot_cpu_data;
 extern struct cpuinfo_x86	new_cpu_data;
 
 extern struct tss_struct	doublefault_tss;
-extern __u32			cpu_caps_cleared[NCAPINTS];
-extern __u32			cpu_caps_set[NCAPINTS];
+extern __u32			cpu_caps_cleared[NCAPINTS + NBUGINTS];
+extern __u32			cpu_caps_set[NCAPINTS + NBUGINTS];
 
 #ifdef CONFIG_SMP
 DECLARE_PER_CPU_SHARED_ALIGNED(struct cpuinfo_x86, cpu_info);
@@ -166,16 +167,24 @@ extern const struct seq_operations cpuinfo_op;
 extern void cpu_detect(struct cpuinfo_x86 *c);
 extern void fpu_detect(struct cpuinfo_x86 *c);
 
+static inline unsigned long l1tf_pfn_limit(void)
+{
+	return BIT(boot_cpu_data.x86_phys_bits - 1 - PAGE_SHIFT) - 1;
+}
+
 extern void early_cpu_init(void);
 extern void identify_boot_cpu(void);
 extern void identify_secondary_cpu(struct cpuinfo_x86 *);
 extern void print_cpu_info(struct cpuinfo_x86 *);
 void print_cpu_msr(struct cpuinfo_x86 *);
 extern void init_scattered_cpuid_features(struct cpuinfo_x86 *c);
+extern u32 get_scattered_cpuid_leaf(unsigned int level,
+				    unsigned int sub_leaf, u8 reg);
 extern unsigned int init_intel_cacheinfo(struct cpuinfo_x86 *c);
 extern void init_amd_cacheinfo(struct cpuinfo_x86 *c);
-
-extern void detect_extended_topology(struct cpuinfo_x86 *c);
+extern int detect_extended_topology_early(struct cpuinfo_x86 *c);
+extern int detect_extended_topology(struct cpuinfo_x86 *c);
+extern int detect_ht_early(struct cpuinfo_x86 *c);
 extern void detect_ht(struct cpuinfo_x86 *c);
 
 #ifdef CONFIG_X86_32
@@ -283,7 +292,7 @@ struct tss_struct {
 
 } ____cacheline_aligned;
 
-DECLARE_PER_CPU_SHARED_ALIGNED(struct tss_struct, init_tss);
+DECLARE_PER_CPU_SHARED_ALIGNED_USER_MAPPED(struct tss_struct, init_tss);
 
 /*
  * Save the original ist values for checking stack pointers during debugging
@@ -552,39 +561,6 @@ static inline void load_sp0(struct tss_struct *tss,
 
 #define set_iopl_mask native_set_iopl_mask
 #endif /* CONFIG_PARAVIRT */
-
-/*
- * Save the cr4 feature set we're using (ie
- * Pentium 4MB enable and PPro Global page
- * enable), so that any CPU's that boot up
- * after us can get the correct flags.
- */
-extern unsigned long mmu_cr4_features;
-extern u32 *trampoline_cr4_features;
-
-static inline void set_in_cr4(unsigned long mask)
-{
-	unsigned long cr4;
-
-	mmu_cr4_features |= mask;
-	if (trampoline_cr4_features)
-		*trampoline_cr4_features = mmu_cr4_features;
-	cr4 = read_cr4();
-	cr4 |= mask;
-	write_cr4(cr4);
-}
-
-static inline void clear_in_cr4(unsigned long mask)
-{
-	unsigned long cr4;
-
-	mmu_cr4_features &= ~mask;
-	if (trampoline_cr4_features)
-		*trampoline_cr4_features = mmu_cr4_features;
-	cr4 = read_cr4();
-	cr4 &= ~mask;
-	write_cr4(cr4);
-}
 
 typedef struct {
 	unsigned long		seg;
@@ -927,7 +903,7 @@ extern unsigned long KSTK_ESP(struct task_struct *task);
 /*
  * User space RSP while inside the SYSCALL fast path
  */
-DECLARE_PER_CPU(unsigned long, old_rsp);
+DECLARE_PER_CPU_USER_MAPPED(unsigned long, old_rsp);
 
 #endif /* CONFIG_X86_64 */
 
@@ -978,4 +954,16 @@ bool xen_set_default_idle(void);
 
 void stop_this_cpu(void *dummy);
 void df_debug(struct pt_regs *regs, long error_code);
+
+enum l1tf_mitigations {
+	L1TF_MITIGATION_OFF,
+	L1TF_MITIGATION_FLUSH_NOWARN,
+	L1TF_MITIGATION_FLUSH,
+	L1TF_MITIGATION_FLUSH_NOSMT,
+	L1TF_MITIGATION_FULL,
+	L1TF_MITIGATION_FULL_FORCE
+};
+
+extern enum l1tf_mitigations l1tf_mitigation;
+
 #endif /* _ASM_X86_PROCESSOR_H */

@@ -561,17 +561,18 @@ static int do_bounce_buffer(struct scatterlist *sgl, unsigned int sg_count)
 	for (i = 0; i < sg_count; i++) {
 		if (i == 0) {
 			/* make sure 1st one does not have hole */
-			if (sgl[i].offset + sgl[i].length != PAGE_SIZE)
+			if (sgl->offset + sgl->length != PAGE_SIZE)
 				return i;
 		} else if (i == sg_count - 1) {
 			/* make sure last one does not have hole */
-			if (sgl[i].offset != 0)
+			if (sgl->offset != 0)
 				return i;
 		} else {
 			/* make sure no hole in the middle */
-			if (sgl[i].length != PAGE_SIZE || sgl[i].offset != 0)
+			if (sgl->length != PAGE_SIZE || sgl->offset != 0)
 				return i;
 		}
+		sgl = sg_next(sgl);
 	}
 	return -1;
 }
@@ -1106,7 +1107,9 @@ static void storvsc_command_completion(struct storvsc_cmd_request *cmd_request)
 
 	if (scmnd->result) {
 		if (scsi_normalize_sense(scmnd->sense_buffer,
-				SCSI_SENSE_BUFFERSIZE, &sense_hdr))
+				SCSI_SENSE_BUFFERSIZE, &sense_hdr) &&
+		    !(sense_hdr.sense_key == NOT_READY &&
+				 sense_hdr.asc == 0x03A))
 			scsi_print_sense_hdr("storvsc", &sense_hdr);
 	}
 

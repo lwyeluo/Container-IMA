@@ -291,6 +291,7 @@ enum vmcs_field {
 #define INTR_TYPE_NMI_INTR		(2 << 8) /* NMI */
 #define INTR_TYPE_HARD_EXCEPTION	(3 << 8) /* processor exception */
 #define INTR_TYPE_SOFT_INTR             (4 << 8) /* software interrupt */
+#define INTR_TYPE_PRIV_SW_EXCEPTION	(5 << 8) /* ICE breakpoint - undocumented */
 #define INTR_TYPE_SOFT_EXCEPTION	(6 << 8) /* software exception */
 
 /* GUEST_INTERRUPTIBILITY_INFO flags. */
@@ -352,29 +353,29 @@ enum vmcs_field {
 #define TYPE_PHYSICAL_APIC_EVENT        (10 << 12)
 #define TYPE_PHYSICAL_APIC_INST         (15 << 12)
 
-/* segment AR */
-#define SEGMENT_AR_L_MASK (1 << 13)
+/* segment AR in VMCS -- these are different from what LAR reports */
+#define VMX_SEGMENT_AR_L_MASK (1 << 13)
 
-#define AR_TYPE_ACCESSES_MASK 1
-#define AR_TYPE_READABLE_MASK (1 << 1)
-#define AR_TYPE_WRITEABLE_MASK (1 << 2)
-#define AR_TYPE_CODE_MASK (1 << 3)
-#define AR_TYPE_MASK 0x0f
-#define AR_TYPE_BUSY_64_TSS 11
-#define AR_TYPE_BUSY_32_TSS 11
-#define AR_TYPE_BUSY_16_TSS 3
-#define AR_TYPE_LDT 2
+#define VMX_AR_TYPE_ACCESSES_MASK 1
+#define VMX_AR_TYPE_READABLE_MASK (1 << 1)
+#define VMX_AR_TYPE_WRITEABLE_MASK (1 << 2)
+#define VMX_AR_TYPE_CODE_MASK (1 << 3)
+#define VMX_AR_TYPE_MASK 0x0f
+#define VMX_AR_TYPE_BUSY_64_TSS 11
+#define VMX_AR_TYPE_BUSY_32_TSS 11
+#define VMX_AR_TYPE_BUSY_16_TSS 3
+#define VMX_AR_TYPE_LDT 2
 
-#define AR_UNUSABLE_MASK (1 << 16)
-#define AR_S_MASK (1 << 4)
-#define AR_P_MASK (1 << 7)
-#define AR_L_MASK (1 << 13)
-#define AR_DB_MASK (1 << 14)
-#define AR_G_MASK (1 << 15)
-#define AR_DPL_SHIFT 5
-#define AR_DPL(ar) (((ar) >> AR_DPL_SHIFT) & 3)
+#define VMX_AR_UNUSABLE_MASK (1 << 16)
+#define VMX_AR_S_MASK (1 << 4)
+#define VMX_AR_P_MASK (1 << 7)
+#define VMX_AR_L_MASK (1 << 13)
+#define VMX_AR_DB_MASK (1 << 14)
+#define VMX_AR_G_MASK (1 << 15)
+#define VMX_AR_DPL_SHIFT 5
+#define VMX_AR_DPL(ar) (((ar) >> VMX_AR_DPL_SHIFT) & 3)
 
-#define AR_RESERVD_MASK 0xfffe0f00
+#define VMX_AR_RESERVD_MASK 0xfffe0f00
 
 #define TSS_PRIVATE_MEMSLOT			(KVM_USER_MEM_SLOTS + 0)
 #define APIC_ACCESS_PAGE_PRIVATE_MEMSLOT	(KVM_USER_MEM_SLOTS + 1)
@@ -475,5 +476,16 @@ enum vm_instruction_error_number {
 	VMXERR_ENTRY_EVENTS_BLOCKED_BY_MOV_SS = 26,
 	VMXERR_INVALID_OPERAND_TO_INVEPT_INVVPID = 28,
 };
+
+enum vmx_l1d_flush_state {
+	VMENTER_L1D_FLUSH_AUTO,
+	VMENTER_L1D_FLUSH_NEVER,
+	VMENTER_L1D_FLUSH_COND,
+	VMENTER_L1D_FLUSH_ALWAYS,
+	VMENTER_L1D_FLUSH_EPT_DISABLED,
+	VMENTER_L1D_FLUSH_NOT_REQUIRED,
+};
+
+extern enum vmx_l1d_flush_state l1tf_vmx_mitigation;
 
 #endif

@@ -282,7 +282,6 @@ static inline struct rt6_info *ip6_dst_alloc(struct net *net,
 
 		memset(dst + 1, 0, sizeof(*rt) - sizeof(*dst));
 		rt6_init_peer(rt, table ? &table->tb6_peers : net->ipv6.peers);
-		rt->rt6i_genid = rt_genid_ipv6(net);
 		INIT_LIST_HEAD(&rt->rt6i_siblings);
 	}
 	return rt;
@@ -1084,9 +1083,6 @@ static struct dst_entry *ip6_dst_check(struct dst_entry *dst, u32 cookie)
 	 * DST_OBSOLETE_FORCE_CHK which forces validation calls down
 	 * into this function always.
 	 */
-	if (rt->rt6i_genid != rt_genid_ipv6(dev_net(rt->dst.dev)))
-		return NULL;
-
 	if (!rt->rt6i_node || (rt->rt6i_node->fn_sernum != cookie))
 		return NULL;
 
@@ -1124,8 +1120,7 @@ static void ip6_link_failure(struct sk_buff *skb)
 	if (rt) {
 		if (rt->rt6i_flags & RTF_CACHE) {
 			dst_hold(&rt->dst);
-			if (ip6_del_rt(rt))
-				dst_free(&rt->dst);
+			ip6_del_rt(rt);
 		} else if (rt->rt6i_node && (rt->rt6i_flags & RTF_DEFAULT)) {
 			rt->rt6i_node->fn_sernum = -1;
 		}
@@ -1694,7 +1689,8 @@ static int __ip6_del_rt(struct rt6_info *rt, struct nl_info *info)
 	struct fib6_table *table;
 	struct net *net = dev_net(rt->dst.dev);
 
-	if (rt == net->ipv6.ip6_null_entry) {
+	if (rt == net->ipv6.ip6_null_entry ||
+	    rt->dst.flags & DST_NOCACHE) {
 		err = -ENOENT;
 		goto out;
 	}
@@ -2184,6 +2180,7 @@ struct rt6_info *addrconf_dst_alloc(struct inet6_dev *idev,
 	rt->rt6i_dst.addr = *addr;
 	rt->rt6i_dst.plen = 128;
 	rt->rt6i_table = fib6_get_table(net, RT6_TABLE_LOCAL);
+	rt->dst.flags |= DST_NOCACHE;
 
 	atomic_set(&rt->dst.__refcnt, 1);
 
@@ -2236,7 +2233,7 @@ void rt6_remove_prefsrc(struct inet6_ifaddr *ifp)
 		.net = net,
 		.addr = &ifp->addr,
 	};
-	fib6_clean_all(net, fib6_remove_prefsrc, 0, &adni);
+	fib6_clean_all(net, fib6_remove_prefsrc, &adni);
 }
 
 struct arg_dev_net {
@@ -2263,7 +2260,7 @@ void rt6_ifdown(struct net *net, struct net_device *dev)
 		.net = net,
 	};
 
-	fib6_clean_all(net, fib6_ifdown, 0, &adn);
+	fib6_clean_all(net, fib6_ifdown, &adn);
 	icmp6_clean_all(fib6_ifdown, &adn);
 }
 
@@ -2318,7 +2315,7 @@ void rt6_mtu_change(struct net_device *dev, unsigned int mtu)
 		.mtu = mtu,
 	};
 
-	fib6_clean_all(dev_net(dev), rt6_mtu_change_route, 0, &arg);
+	fib6_clean_all(dev_net(dev), rt6_mtu_change_route, &arg);
 }
 
 static const struct nla_policy rtm_ipv6_policy[RTA_MAX+1] = {

@@ -9,6 +9,7 @@
 #include <asm/processor.h>
 #include <asm/apic.h>
 #include <asm/cpu.h>
+#include <asm/spec-ctrl.h>
 #include <asm/pci-direct.h>
 
 #ifdef CONFIG_X86_64
@@ -285,6 +286,12 @@ static int nearby_node(int apicid)
 }
 #endif
 
+static void amd_get_topology_early(struct cpuinfo_x86 *c)
+{
+	if (cpu_has(c, X86_FEATURE_TOPOEXT))
+		smp_num_siblings = ((cpuid_ebx(0x8000001e) >> 8) & 0x3) + 1;
+}
+
 /*
  * Fixup core topology information for
  * (1) AMD multi-node processors
@@ -300,6 +307,7 @@ static void amd_get_topology(struct cpuinfo_x86 *c)
 
 	/* get information required for multi-node processors */
 	if (cpu_has_topoext) {
+		int err;
 		u32 eax, ebx, ecx, edx;
 
 		cpuid(0x8000001e, &eax, &ebx, &ecx, &edx);
@@ -307,9 +315,18 @@ static void amd_get_topology(struct cpuinfo_x86 *c)
 		node_id = ecx & 7;
 
 		/* get compute unit information */
-		smp_num_siblings = ((ebx >> 8) & 3) + 1;
+		cores_per_cu = smp_num_siblings;
+		c->x86_max_cores /= smp_num_siblings;
 		c->compute_unit_id = ebx & 0xff;
-		cores_per_cu += ((ebx >> 8) & 3);
+
+		/*
+		 * In case leaf B is available, use it to derive
+		 * topology information.
+		 */
+		err = detect_extended_topology(c);
+		if (!err)
+			c->x86_coreid_bits = get_count_order(c->x86_max_cores);
+
 	} else if (cpu_has(c, X86_FEATURE_NODEID_MSR)) {
 		u64 value;
 
@@ -325,8 +342,8 @@ static void amd_get_topology(struct cpuinfo_x86 *c)
 		u32 cus_per_node;
 
 		set_cpu_cap(c, X86_FEATURE_AMD_DCM);
-		cores_per_node = c->x86_max_cores / nodes;
-		cus_per_node = cores_per_node / cores_per_cu;
+		cus_per_node = c->x86_max_cores / nodes;
+		cores_per_node = cus_per_node * cores_per_cu;
 
 		/* store NodeID, use llc_shared_map to store sibling info */
 		per_cpu(cpu_llc_id, cpu) = node_id;
@@ -355,7 +372,6 @@ static void amd_detect_cmp(struct cpuinfo_x86 *c)
 	c->phys_proc_id = c->initial_apicid >> bits;
 	/* use socket ID also for last level cache */
 	per_cpu(cpu_llc_id, cpu) = c->phys_proc_id;
-	amd_get_topology(c);
 #endif
 }
 
@@ -473,10 +489,32 @@ static void bsp_init_amd(struct cpuinfo_x86 *c)
 		va_align.mask	  = (upperbit - 1) & PAGE_MASK;
 		va_align.flags    = ALIGN_VA_32 | ALIGN_VA_64;
 	}
+
+	if (c->x86 >= 0x15 && c->x86 <= 0x17) {
+		unsigned int bit;
+
+		switch (c->x86) {
+		case 0x15: bit = 54; break;
+		case 0x16: bit = 33; break;
+		case 0x17: bit = 10; break;
+		default: return;
+		}
+		/*
+		 * Try to cache the base value so further operations can
+		 * avoid RMW. If that faults, do not enable SSBD.
+		 */
+		if (!rdmsrl_safe(MSR_AMD64_LS_CFG, &x86_amd_ls_cfg_base)) {
+			setup_force_cpu_cap(X86_FEATURE_LS_CFG_SSBD);
+			setup_force_cpu_cap(X86_FEATURE_SSBD);
+			x86_amd_ls_cfg_ssbd_mask = 1ULL << bit;
+		}
+	}
 }
 
 static void early_init_amd(struct cpuinfo_x86 *c)
 {
+	u64 value;
+
 	early_init_amd_mc(c);
 
 	/*
@@ -525,6 +563,21 @@ static void early_init_amd(struct cpuinfo_x86 *c)
 			wrmsrl(MSR_AMD64_LS_CFG, val | BIT(15));
 	}
 
+	/* Re-enable TopologyExtensions if switched off by BIOS */
+	if (c->x86 == 0x15 &&
+	    (c->x86_model >= 0x10 && c->x86_model <= 0x6f) &&
+	    !cpu_has(c, X86_FEATURE_TOPOEXT)) {
+
+		if (msr_set_bit(0xc0011005, 54) > 0) {
+			rdmsrl(0xc0011005, value);
+			if (value & BIT_64(54)) {
+				set_cpu_cap(c, X86_FEATURE_TOPOEXT);
+				pr_info_once(FW_INFO "CPU: Re-enabling disabled Topology Extensions Support.\n");
+			}
+		}
+	}
+
+	amd_get_topology_early(c);
 }
 
 static const int amd_erratum_383[];
@@ -626,23 +679,6 @@ static void init_amd(struct cpuinfo_x86 *c)
 		}
 	}
 
-	/* re-enable TopologyExtensions if switched off by BIOS */
-	if ((c->x86 == 0x15) &&
-	    (c->x86_model >= 0x10) && (c->x86_model <= 0x1f) &&
-	    !cpu_has(c, X86_FEATURE_TOPOEXT)) {
-
-		if (!rdmsrl_safe(0xc0011005, &value)) {
-			value |= 1ULL << 54;
-			wrmsrl_safe(0xc0011005, value);
-			rdmsrl(0xc0011005, value);
-			if (value & (1ULL << 54)) {
-				set_cpu_cap(c, X86_FEATURE_TOPOEXT);
-				printk(KERN_INFO FW_INFO "CPU: Re-enabling "
-				  "disabled Topology Extensions Support\n");
-			}
-		}
-	}
-
 	/*
 	 * The way access filter has a performance penalty on some workloads.
 	 * Disable it on the affected CPUs.
@@ -661,12 +697,9 @@ static void init_amd(struct cpuinfo_x86 *c)
 	/* Multi core CPU? */
 	if (c->extended_cpuid_level >= 0x80000008) {
 		amd_detect_cmp(c);
+		amd_get_topology(c);
 		srat_detect_node(c);
 	}
-
-#ifdef CONFIG_X86_32
-	detect_ht(c);
-#endif
 
 	init_amd_cacheinfo(c);
 
@@ -674,8 +707,17 @@ static void init_amd(struct cpuinfo_x86 *c)
 		set_cpu_cap(c, X86_FEATURE_K8);
 
 	if (cpu_has_xmm2) {
-		/* MFENCE stops RDTSC speculation */
-		set_cpu_cap(c, X86_FEATURE_MFENCE_RDTSC);
+		/*
+		 * Use LFENCE for execution serialization. On some families
+		 * LFENCE is already serialized and the MSR is not available,
+		 * but msr_set_bit() uses rdmsrl_safe() and wrmsrl_safe().
+		 */
+		if (c->x86 > 0xf)
+			msr_set_bit(MSR_F10H_DECFG,
+				    MSR_F10H_DECFG_LFENCE_SERIALIZE_BIT);
+
+		/* LFENCE with MSR_F10H_DECFG[1]=1 stops RDTSC speculation */
+		set_cpu_cap(c, X86_FEATURE_LFENCE_RDTSC);
 	}
 
 #ifdef CONFIG_X86_64
@@ -753,6 +795,61 @@ static void init_amd(struct cpuinfo_x86 *c)
 	if (cpu_has_amd_erratum(c, amd_erratum_400))
 		set_cpu_bug(c, X86_BUG_AMD_APIC_C1E);
 
+	if (c->x86 == 0x17) {
+		set_cpu_cap(c, X86_FEATURE_ZEN);
+		/*
+		 * Fix erratum 1076: CPB feature bit not being set in CPUID.
+		 * It affects all up to and including B1.
+		 */
+		if (c->x86_model <= 1 && c->x86_mask <= 1)
+			set_cpu_cap(c, X86_FEATURE_CPB);
+	}
+
+	/* AMD speculative control support */
+	if (cpu_has(c, X86_FEATURE_SPEC_CTRL)) {
+		pr_info_once("FEATURE SPEC_CTRL Present\n");
+		set_ibrs_supported();
+		set_ibpb_supported();
+		if (ibrs_inuse)
+			sysctl_ibrs_enabled = 1;
+		if (ibpb_inuse)
+			sysctl_ibpb_enabled = 1;
+		set_cpu_cap(c, X86_FEATURE_MSR_SPEC_CTRL);
+	} else if (cpu_has(c, X86_FEATURE_AMD_IBPB)) {
+		pr_info_once("FEATURE SPEC_CTRL Not Present\n");
+		pr_info_once("FEATURE IBPB Present\n");
+		set_ibpb_supported();
+		if (ibpb_inuse)
+			sysctl_ibpb_enabled = 1;
+	} else {
+		pr_info_once("FEATURE SPEC_CTRL Not Present\n");
+		pr_info_once("FEATURE IBPB Not Present\n");
+		/*
+		 * On AMD processors that do not support the speculative
+		 * control features, IBPB type support can be achieved by
+		 * disabling indirect branch predictor support.
+		 */
+		if (!ibpb_disabled) {
+			u64 val;
+
+			switch (c->x86) {
+			case 0x10:
+			case 0x12:
+			case 0x16:
+				pr_info_once("Disabling indirect branch predictor support\n");
+				rdmsrl(MSR_F15H_IC_CFG, val);
+				val |= MSR_F15H_IC_CFG_DIS_IND;
+				wrmsrl(MSR_F15H_IC_CFG, val);
+				break;
+			}
+		}
+	}
+
+	if (cpu_has(c, X86_FEATURE_SPEC_CTRL_SSBD) ||
+	    cpu_has(c, X86_FEATURE_VIRT_SSBD)) {
+		set_cpu_cap(c, X86_FEATURE_SSBD);
+	}
+
 	rdmsr_safe(MSR_AMD64_PATCH_LEVEL, &c->microcode, &dummy);
 }
 
@@ -772,14 +869,6 @@ static unsigned int amd_size_cache(struct cpuinfo_x86 *c, unsigned int size)
 	return size;
 }
 #endif
-
-static void cpu_set_tlb_flushall_shift(struct cpuinfo_x86 *c)
-{
-	tlb_flushall_shift = 5;
-
-	if (c->x86 <= 0x11)
-		tlb_flushall_shift = 4;
-}
 
 static void cpu_detect_tlb_amd(struct cpuinfo_x86 *c)
 {
@@ -832,8 +921,6 @@ static void cpu_detect_tlb_amd(struct cpuinfo_x86 *c)
 		tlb_lli_2m[ENTRIES] = eax & mask;
 
 	tlb_lli_4m[ENTRIES] = tlb_lli_2m[ENTRIES] >> 1;
-
-	cpu_set_tlb_flushall_shift(c);
 }
 
 static const struct cpu_dev amd_cpu_dev = {

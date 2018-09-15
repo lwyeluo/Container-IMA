@@ -110,6 +110,7 @@
 #include <asm/mce.h>
 #include <asm/alternative.h>
 #include <asm/prom.h>
+#include <asm/kaiser.h>
 
 /*
  * max_low_pfn_mapped: highest direct mapped pfn under 4GB
@@ -295,6 +296,8 @@ static void __init reserve_brk(void)
 	_brk_start = 0;
 }
 
+u64 relocated_ramdisk;
+
 #ifdef CONFIG_BLK_DEV_INITRD
 
 static u64 __init get_ramdisk_image(void)
@@ -321,25 +324,24 @@ static void __init relocate_initrd(void)
 	u64 ramdisk_image = get_ramdisk_image();
 	u64 ramdisk_size  = get_ramdisk_size();
 	u64 area_size     = PAGE_ALIGN(ramdisk_size);
-	u64 ramdisk_here;
 	unsigned long slop, clen, mapaddr;
 	char *p, *q;
 
 	/* We need to move the initrd down into directly mapped mem */
-	ramdisk_here = memblock_find_in_range(0, PFN_PHYS(max_pfn_mapped),
-						 area_size, PAGE_SIZE);
+	relocated_ramdisk = memblock_find_in_range(0, PFN_PHYS(max_pfn_mapped),
+						   area_size, PAGE_SIZE);
 
-	if (!ramdisk_here)
+	if (!relocated_ramdisk)
 		panic("Cannot find place for new RAMDISK of size %lld\n",
-			 ramdisk_size);
+		      ramdisk_size);
 
 	/* Note: this includes all the mem currently occupied by
 	   the initrd, we rely on that fact to keep the data intact. */
-	memblock_reserve(ramdisk_here, area_size);
-	initrd_start = ramdisk_here + PAGE_OFFSET;
+	memblock_reserve(relocated_ramdisk, area_size);
+	initrd_start = relocated_ramdisk + PAGE_OFFSET;
 	initrd_end   = initrd_start + ramdisk_size;
 	printk(KERN_INFO "Allocated new RAMDISK: [mem %#010llx-%#010llx]\n",
-			 ramdisk_here, ramdisk_here + ramdisk_size - 1);
+	       relocated_ramdisk, relocated_ramdisk + ramdisk_size - 1);
 
 	q = (char *)initrd_start;
 
@@ -363,7 +365,7 @@ static void __init relocate_initrd(void)
 	printk(KERN_INFO "Move RAMDISK from [mem %#010llx-%#010llx] to"
 		" [mem %#010llx-%#010llx]\n",
 		ramdisk_image, ramdisk_image + ramdisk_size - 1,
-		ramdisk_here, ramdisk_here + ramdisk_size - 1);
+		relocated_ramdisk, relocated_ramdisk + ramdisk_size - 1);
 }
 
 static void __init early_reserve_initrd(void)
@@ -446,6 +448,9 @@ static void __init parse_setup_data(void)
 			break;
 		case SETUP_DTB:
 			add_dtb(pa_data);
+			break;
+		case SETUP_EFI:
+			parse_efi_setup(pa_data, data_len);
 			break;
 		default:
 			break;
@@ -824,6 +829,20 @@ static void __init trim_low_memory_range(void)
 }
 	
 /*
+ * Dump out kernel offset information on panic.
+ */
+static int
+dump_kernel_offset(struct notifier_block *self, unsigned long v, void *p)
+{
+	pr_emerg("Kernel Offset: 0x%lx from 0x%lx "
+		 "(relocation range: 0x%lx-0x%lx)\n",
+		 (unsigned long)&_text - __START_KERNEL, __START_KERNEL,
+		 __START_KERNEL_map, MODULES_VADDR-1);
+
+	return 0;
+}
+
+/*
  * Determine if we were loaded by an EFI loader.  If so, then we have also been
  * passed the efi memmap, systab, etc., so we should use these data structures
  * for initialization.  Note, the efi init code path is determined by the
@@ -840,6 +859,12 @@ void __init setup_arch(char **cmdline_p)
 {
 	memblock_reserve(__pa_symbol(_text),
 			 (unsigned long)__bss_stop - (unsigned long)_text);
+
+	/*
+	 * Make sure page 0 is always reserved because on systems with
+	 * L1TF its contents can be leaked to user processes.
+	 */
+	memblock_reserve(0, PAGE_SIZE);
 
 	early_reserve_initrd();
 
@@ -908,11 +933,11 @@ void __init setup_arch(char **cmdline_p)
 #ifdef CONFIG_EFI
 	if (!strncmp((char *)&boot_params.efi_info.efi_loader_signature,
 		     "EL32", 4)) {
-		set_bit(EFI_BOOT, &x86_efi_facility);
+		set_bit(EFI_BOOT, &efi.flags);
 	} else if (!strncmp((char *)&boot_params.efi_info.efi_loader_signature,
 		     "EL64", 4)) {
-		set_bit(EFI_BOOT, &x86_efi_facility);
-		set_bit(EFI_64BIT, &x86_efi_facility);
+		set_bit(EFI_BOOT, &efi.flags);
+		set_bit(EFI_64BIT, &efi.flags);
 	}
 
 	if (efi_enabled(EFI_BOOT))
@@ -924,8 +949,6 @@ void __init setup_arch(char **cmdline_p)
 	iomem_resource.end = (1ULL << boot_cpu_data.x86_phys_bits) - 1;
 	setup_memory_map();
 	parse_setup_data();
-	/* update the e820_saved too */
-	e820_reserve_setup_data();
 
 	copy_edd();
 
@@ -987,6 +1010,8 @@ void __init setup_arch(char **cmdline_p)
 		early_dump_pci_devices();
 #endif
 
+	/* update the e820_saved too */
+	e820_reserve_setup_data();
 	finish_e820_parsing();
 
 	if (efi_enabled(EFI_BOOT))
@@ -1001,6 +1026,12 @@ void __init setup_arch(char **cmdline_p)
 	 * needs to be done after dmi_scan_machine, for the BP.
 	 */
 	init_hypervisor_platform();
+
+	/*
+	 * This needs to happen right after XENPV is set on xen and
+	 * kaiser_enabled is checked below in cleanup_highmap().
+	 */
+	kaiser_check_boottime_disable();
 
 	x86_init.resources.probe_roms();
 
@@ -1127,12 +1158,12 @@ void __init setup_arch(char **cmdline_p)
 
 #ifdef CONFIG_EFI_SECURE_BOOT_SIG_ENFORCE
 	if (boot_params.secure_boot == EFI_SECURE_BOOT) {
-		set_bit(EFI_SECURE_BOOT, &x86_efi_facility);
+		set_bit(EFI_SECURE_BOOT, &efi.flags);
 		enforce_signed_modules();
 		pr_info("Secure boot enabled\n");
 	}
 	else if (boot_params.secure_boot == EFI_MOKSBSTATE_DISABLED) {
-		set_bit(EFI_MOKSBSTATE_DISABLED, &x86_efi_facility);
+		set_bit(EFI_MOKSBSTATE_DISABLED, &efi.flags);
 		boot_params.secure_boot = 0;
 		pr_info("Secure boot MOKSBState disabled\n");
     }
@@ -1173,14 +1204,6 @@ void __init setup_arch(char **cmdline_p)
 	clone_pgd_range(initial_page_table + KERNEL_PGD_BOUNDARY,
 			swapper_pg_dir     + KERNEL_PGD_BOUNDARY,
 			KERNEL_PGD_PTRS);
-
-	/*
-	 * sync back low identity map too.  It is used for example
-	 * in the 32-bit EFI stub.
-	 */
-	clone_pgd_range(initial_page_table,
-			swapper_pg_dir     + KERNEL_PGD_BOUNDARY,
-			min(KERNEL_PGD_PTRS, KERNEL_PGD_BOUNDARY));
 #endif
 
 	tboot_probe();
@@ -1242,14 +1265,8 @@ void __init setup_arch(char **cmdline_p)
 	register_refined_jiffies(CLOCK_TICK_RATE);
 
 #ifdef CONFIG_EFI
-	/* Once setup is done above, unmap the EFI memory map on
-	 * mismatched firmware/kernel archtectures since there is no
-	 * support for runtime services.
-	 */
-	if (efi_enabled(EFI_BOOT) && !efi_is_native()) {
-		pr_info("efi: Setup done, disabling due to 32/64-bit mismatch\n");
-		efi_unmap_memmap();
-	}
+	if (efi_enabled(EFI_BOOT))
+		efi_apply_memmap_quirks();
 #endif
 }
 
@@ -1269,3 +1286,15 @@ void __init i386_reserve_resources(void)
 }
 
 #endif /* CONFIG_X86_32 */
+
+static struct notifier_block kernel_offset_notifier = {
+	.notifier_call = dump_kernel_offset
+};
+
+static int __init register_kernel_offset_dumper(void)
+{
+	atomic_notifier_chain_register(&panic_notifier_list,
+					&kernel_offset_notifier);
+	return 0;
+}
+__initcall(register_kernel_offset_dumper);

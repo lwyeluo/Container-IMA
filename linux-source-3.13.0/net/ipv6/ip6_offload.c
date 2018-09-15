@@ -86,7 +86,7 @@ static struct sk_buff *ipv6_gso_segment(struct sk_buff *skb,
 	const struct net_offload *ops;
 	int proto;
 	struct frag_hdr *fptr;
-	unsigned int unfrag_ip6hlen;
+	unsigned int payload_len;
 	u8 *prevhdr;
 	int offset = 0;
 	bool encap, udpfrag;
@@ -142,8 +142,10 @@ static struct sk_buff *ipv6_gso_segment(struct sk_buff *skb,
 		skb->network_header = (u8 *)ipv6h - skb->head;
 
 		if (udpfrag) {
-			unfrag_ip6hlen = ip6_find_1stfragopt(skb, &prevhdr);
-			fptr = (struct frag_hdr *)((u8 *)ipv6h + unfrag_ip6hlen);
+			int err = ip6_find_1stfragopt(skb, &prevhdr);
+			if (err < 0)
+				return ERR_PTR(err);
+			fptr = (struct frag_hdr *)((u8 *)ipv6h + err);
 			fptr->frag_off = htons(offset);
 			if (skb->next != NULL)
 				fptr->frag_off |= htons(IP6_MF);
@@ -270,7 +272,7 @@ static struct sk_buff **ipv6_gro_receive(struct sk_buff **head,
 	csum = skb->csum;
 	skb_postpull_rcsum(skb, iph, skb_network_header_len(skb));
 
-	pp = ops->callbacks.gro_receive(head, skb);
+	pp = call_gro_receive(ops->callbacks.gro_receive, head, skb);
 
 	skb->csum = csum;
 

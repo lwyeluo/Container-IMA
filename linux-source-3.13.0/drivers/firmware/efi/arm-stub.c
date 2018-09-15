@@ -127,6 +127,18 @@ grow:
 	return status;
 }
 
+
+
+static void efi_char16_printk(efi_system_table_t *sys_table_arg,
+			      efi_char16_t *str)
+{
+	struct efi_simple_text_output_protocol *out;
+
+	out = (struct efi_simple_text_output_protocol *)sys_table_arg->con_out;
+	out->output_string(out, str);
+}
+
+
 /*
  * This function handles the architcture specific differences between arm and
  * arm64 regarding where the kernel image must be loaded and any memory that
@@ -140,31 +152,6 @@ static efi_status_t handle_kernel_image(efi_system_table_t *sys_table,
 					unsigned long *reserve_size,
 					unsigned long dram_base,
 					efi_loaded_image_t *image);
-static unsigned long __init get_dram_base(efi_system_table_t *sys_table_arg)
-{
-	efi_status_t status;
-	unsigned long map_size;
-	unsigned long membase  = EFI_ERROR;
-	struct efi_memory_map map;
-	efi_memory_desc_t *md;
-
-	status = efi_get_memory_map(sys_table_arg, (efi_memory_desc_t **)&map.map,
-				    &map_size, &map.desc_size, NULL, NULL);
-	if (status != EFI_SUCCESS)
-		return membase;
-
-	map.map_end = map.map + map_size;
-
-	for_each_efi_memory_desc(&map, md)
-		if (md->attribute & EFI_MEMORY_WB)
-			if (membase > md->phys_addr)
-				membase = md->phys_addr;
-
-	efi_call_early(free_pool, map.map);
-
-	return membase;
-}
-
 /*
  * EFI entry point for the arm/arm64 EFI stubs.  This is the entrypoint
  * that is described in the PE/COFF header.  Most of the code is the same
@@ -227,7 +214,7 @@ unsigned long __init efi_entry(void *handle, efi_system_table_t *sys_table,
 	 * protocol. We are going to copy the command line into the
 	 * device tree, so this can be allocated anywhere.
 	 */
-	cmdline_ptr = efi_convert_cmdline_to_ascii(sys_table, image, &cmdline_size);
+	cmdline_ptr = efi_convert_cmdline(sys_table, image, &cmdline_size);
 	if (!cmdline_ptr) {
 		pr_efi_err(sys_table, "getting command line via LOADED_IMAGE_PROTOCOL\n");
 		goto fail_free_image;

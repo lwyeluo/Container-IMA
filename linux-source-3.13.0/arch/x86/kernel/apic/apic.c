@@ -55,6 +55,7 @@
 #include <asm/mce.h>
 #include <asm/tsc.h>
 #include <asm/hypervisor.h>
+#include <asm/irq_regs.h>
 
 unsigned int num_processors;
 
@@ -2115,6 +2116,21 @@ void disconnect_bsp_APIC(int virt_wire_setup)
 	apic_write(APIC_LVT1, value);
 }
 
+/**
+ * apic_id_is_primary_thread - Check whether APIC ID belongs to a primary thread
+ * @id:	APIC ID to check
+ */
+bool apic_id_is_primary_thread(unsigned int apicid)
+{
+	u32 mask;
+
+	if (smp_num_siblings == 1)
+		return true;
+	/* Isolate the SMT bit(s) in the APICID and check for 0 */
+	mask = (1U << (fls(smp_num_siblings) - 1)) - 1;
+	return !(apicid & mask);
+}
+
 int generic_processor_info(int apicid, int version)
 {
 	int cpu, max = nr_cpu_ids;
@@ -2161,6 +2177,20 @@ int generic_processor_info(int apicid, int version)
 		cpu = 0;
 	} else
 		cpu = cpumask_next_zero(-1, cpu_present_mask);
+
+	/*
+	 * This can happen on physical hotplug. The sanity check at boot time
+	 * is done from native_smp_prepare_cpus() after num_possible_cpus() is
+	 * established.
+	 */
+	if (topology_update_package_map(apicid, cpu) < 0) {
+		int thiscpu = max + disabled_cpus;
+
+		pr_warning("ACPI: Package limit reached. Processor %d/0x%x ignored.\n",
+			   thiscpu, apicid);
+		disabled_cpus++;
+		return -ENOSPC;
+	}
 
 	/*
 	 * Validate version

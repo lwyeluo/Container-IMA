@@ -2575,7 +2575,7 @@ int dev_hard_start_xmit(struct sk_buff *skb, struct net_device *dev,
 		if (skb->encapsulation)
 			features &= dev->hw_enc_features;
 
-		if (netif_needs_gso(skb, features)) {
+		if (netif_needs_gso(dev, skb, features)) {
 			if (unlikely(dev_gso_segment(skb, features)))
 				goto out_kfree_skb;
 			if (skb->next)
@@ -3900,7 +3900,8 @@ static enum gro_result dev_gro_receive(struct napi_struct *napi, struct sk_buff 
 		NAPI_GRO_CB(skb)->same_flow = 0;
 		NAPI_GRO_CB(skb)->flush = 0;
 		NAPI_GRO_CB(skb)->free = 0;
-		NAPI_GRO_CB(skb)->udp_mark = 0;
+		NAPI_GRO_CB(skb)->encap_mark = 0;
+		NAPI_GRO_CB(skb)->recursion_counter = 0;
 
 		pp = ptype->callbacks.gro_receive(&napi->gro_list, skb);
 		break;
@@ -4536,6 +4537,32 @@ void *netdev_adjacent_get_private(struct list_head *adj_list)
 	return adj->private;
 }
 EXPORT_SYMBOL(netdev_adjacent_get_private);
+
+/**
+ * netdev_upper_get_next_dev_rcu - Get the next dev from upper list
+ * @dev: device
+ * @iter: list_head ** of the current position
+ *
+ * Gets the next device from the dev's upper list, starting from iter
+ * position. The caller must hold RCU read lock.
+ */
+struct net_device *netdev_upper_get_next_dev_rcu(struct net_device *dev,
+						 struct list_head **iter)
+{
+	struct netdev_adjacent *upper;
+
+	WARN_ON_ONCE(!rcu_read_lock_held() && !lockdep_rtnl_is_held());
+
+	upper = list_entry_rcu((*iter)->next, struct netdev_adjacent, list);
+
+	if (&upper->list == &dev->adj_list.upper)
+		return NULL;
+
+	*iter = &upper->list;
+
+	return upper->dev;
+}
+EXPORT_SYMBOL(netdev_upper_get_next_dev_rcu);
 
 /**
  * netdev_all_upper_get_next_dev_rcu - Get the next dev from upper list
@@ -5665,6 +5692,44 @@ static void rollback_registered(struct net_device *dev)
 	list_del(&single);
 }
 
+static netdev_features_t netdev_sync_upper_features(struct net_device *lower,
+	struct net_device *upper, netdev_features_t features)
+{
+	netdev_features_t upper_disables = NETIF_F_UPPER_DISABLES;
+	netdev_features_t feature;
+
+	for_each_netdev_feature(&upper_disables, feature) {
+		if (!(upper->wanted_features & feature)
+		    && (features & feature)) {
+			netdev_dbg(lower, "Dropping feature %pNF, upper dev %s has it off.\n",
+				   &feature, upper->name);
+			features &= ~feature;
+		}
+	}
+
+	return features;
+}
+
+static void netdev_sync_lower_features(struct net_device *upper,
+	struct net_device *lower, netdev_features_t features)
+{
+	netdev_features_t upper_disables = NETIF_F_UPPER_DISABLES;
+	netdev_features_t feature;
+
+	for_each_netdev_feature(&upper_disables, feature) {
+		if (!(features & feature) && (lower->features & feature)) {
+			netdev_dbg(upper, "Disabling feature %pNF on lower dev %s.\n",
+				   &feature, lower->name);
+			lower->wanted_features &= ~feature;
+			netdev_update_features(lower);
+
+			if (unlikely(lower->features & feature))
+				netdev_WARN(upper, "failed to disable %pNF on %s!\n",
+					    &feature, lower->name);
+		}
+	}
+}
+
 static netdev_features_t netdev_fix_features(struct net_device *dev,
 	netdev_features_t features)
 {
@@ -5727,7 +5792,9 @@ static netdev_features_t netdev_fix_features(struct net_device *dev,
 
 int __netdev_update_features(struct net_device *dev)
 {
+	struct net_device *upper, *lower;
 	netdev_features_t features;
+	struct list_head *iter;
 	int err = 0;
 
 	ASSERT_RTNL();
@@ -5739,6 +5806,10 @@ int __netdev_update_features(struct net_device *dev)
 
 	/* driver might be less strict about feature dependencies */
 	features = netdev_fix_features(dev, features);
+
+	/* some features can't be enabled if they're off an an upper device */
+	netdev_for_each_upper_dev_rcu(dev, upper, iter)
+		features = netdev_sync_upper_features(dev, upper, features);
 
 	if (dev->features == features)
 		return 0;
@@ -5755,6 +5826,12 @@ int __netdev_update_features(struct net_device *dev)
 			err, &features, &dev->features);
 		return -1;
 	}
+
+	/* some features must be disabled on lower devices when disabled
+	 * on an upper device (think: bonding master or bridge)
+	 */
+	netdev_for_each_lower_dev(dev, lower, iter)
+		netdev_sync_lower_features(dev, lower, features);
 
 	if (!err)
 		dev->features = features;

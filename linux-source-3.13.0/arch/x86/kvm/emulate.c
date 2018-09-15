@@ -25,6 +25,7 @@
 #include <linux/module.h>
 #include <asm/kvm_emulate.h>
 #include <linux/stringify.h>
+#include <asm/nospec-branch.h>
 
 #include "x86.h"
 #include "tss.h"
@@ -808,6 +809,20 @@ static int do_insn_fetch(struct x86_emulate_ctxt *ctxt,
 		goto done;						\
 })
 
+static int segmented_write_std(struct x86_emulate_ctxt *ctxt,
+			       struct segmented_address addr,
+			       void *data,
+			       unsigned int size)
+{
+	int rc;
+	ulong linear;
+
+	rc = linearize(ctxt, addr, size, true, &linear);
+	if (rc != X86EMUL_CONTINUE)
+		return rc;
+	return ctxt->ops->write_std(ctxt, linear, data, size, &ctxt->exception);
+}
+
 /*
  * Given the 'reg' portion of a ModRM byte, and a register block, return a
  * pointer into the block that addresses the relevant register.
@@ -891,8 +906,8 @@ static u8 test_cc(unsigned int condition, unsigned long flags)
 	void (*fop)(void) = (void *)em_setcc + 4 * (condition & 0xf);
 
 	flags = (flags & EFLAGS_MASK) | X86_EFLAGS_IF;
-	asm("push %[flags]; popf; call *%[fastop]"
-	    : "=a"(rc) : [fastop]"r"(fop), [flags]"r"(flags));
+	asm("push %[flags]; popf; " CALL_NOSPEC
+	    : "=a"(rc) : [thunk_target]"r"(fop), [flags]"r"(flags));
 	return rc;
 }
 
@@ -1439,7 +1454,6 @@ static int write_segment_descriptor(struct x86_emulate_ctxt *ctxt,
 				    &ctxt->exception);
 }
 
-/* Does not support long mode */
 static int __load_segment_descriptor(struct x86_emulate_ctxt *ctxt,
 				     u16 selector, int seg, u8 cpl,
 				     struct desc_struct *desc)
@@ -1474,20 +1488,34 @@ static int __load_segment_descriptor(struct x86_emulate_ctxt *ctxt,
 
 	rpl = selector & 3;
 
-	/* NULL selector is not valid for TR, CS and SS (except for long mode) */
-	if ((seg == VCPU_SREG_CS
-	     || (seg == VCPU_SREG_SS
-		 && (ctxt->mode != X86EMUL_MODE_PROT64 || rpl != cpl))
-	     || seg == VCPU_SREG_TR)
-	    && null_selector)
-		goto exception;
-
 	/* TR should be in GDT only */
 	if (seg == VCPU_SREG_TR && (selector & (1 << 2)))
 		goto exception;
 
-	if (null_selector) /* for NULL selector skip all following checks */
+	/* NULL selector is not valid for TR, CS and (except for long mode) SS */
+	if (null_selector) {
+		if (seg == VCPU_SREG_CS || seg == VCPU_SREG_TR)
+			goto exception;
+
+		if (seg == VCPU_SREG_SS) {
+			if (ctxt->mode != X86EMUL_MODE_PROT64 || rpl != cpl)
+				goto exception;
+
+			/*
+			 * ctxt->ops->set_segment expects the CPL to be in
+			 * SS.DPL, so fake an expand-up 32-bit data segment.
+			 */
+			seg_desc.type = 3;
+			seg_desc.p = 1;
+			seg_desc.s = 1;
+			seg_desc.dpl = cpl;
+			seg_desc.d = 1;
+			seg_desc.g = 1;
+		}
+
+		/* Skip all following checks */
 		goto load;
+	}
 
 	ret = read_segment_descriptor(ctxt, selector, &seg_desc, &desc_addr);
 	if (ret != X86EMUL_CONTINUE)
@@ -1589,6 +1617,21 @@ static int load_segment_descriptor(struct x86_emulate_ctxt *ctxt,
 				   u16 selector, int seg)
 {
 	u8 cpl = ctxt->ops->cpl(ctxt);
+
+	/*
+	 * None of MOV, POP and LSS can load a NULL selector in CPL=3, but
+	 * they can load it at CPL<3 (Intel's manual says only LSS can,
+	 * but it's wrong).
+	 *
+	 * However, the Intel manual says that putting IST=1/DPL=3 in
+	 * an interrupt gate will result in SS=3 (the AMD manual instead
+	 * says it doesn't), so allow SS=3 in __load_segment_descriptor
+	 * and only forbid it here.
+	 */
+	if (seg == VCPU_SREG_SS && selector == 3 &&
+	    ctxt->mode == X86EMUL_MODE_PROT64)
+		return emulate_exception(ctxt, GP_VECTOR, 0, true);
+
 	return __load_segment_descriptor(ctxt, selector, seg, cpl, NULL);
 }
 
@@ -1986,15 +2029,9 @@ static int em_iret(struct x86_emulate_ctxt *ctxt)
 static int em_jmp_far(struct x86_emulate_ctxt *ctxt)
 {
 	int rc;
-	unsigned short sel, old_sel;
-	struct desc_struct old_desc, new_desc;
-	const struct x86_emulate_ops *ops = ctxt->ops;
+	unsigned short sel;
+	struct desc_struct new_desc;
 	u8 cpl = ctxt->ops->cpl(ctxt);
-
-	/* Assignment of RIP may only fail in 64-bit mode */
-	if (ctxt->mode == X86EMUL_MODE_PROT64)
-		ops->get_segment(ctxt, &old_sel, &old_desc, NULL,
-				 VCPU_SREG_CS);
 
 	memcpy(&sel, ctxt->src.valptr + ctxt->op_bytes, 2);
 
@@ -2004,12 +2041,10 @@ static int em_jmp_far(struct x86_emulate_ctxt *ctxt)
 		return rc;
 
 	rc = assign_eip_far(ctxt, ctxt->src.val, new_desc.l);
-	if (rc != X86EMUL_CONTINUE) {
-		WARN_ON(ctxt->mode != X86EMUL_MODE_PROT64);
-		/* assigning eip failed; restore the old cs */
-		ops->set_segment(ctxt, old_sel, &old_desc, 0, VCPU_SREG_CS);
-		return rc;
-	}
+	/* Error handling is not implemented. */
+	if (rc != X86EMUL_CONTINUE)
+		return X86EMUL_UNHANDLEABLE;
+
 	return rc;
 }
 
@@ -2075,14 +2110,8 @@ static int em_ret_far(struct x86_emulate_ctxt *ctxt)
 {
 	int rc;
 	unsigned long eip, cs;
-	u16 old_cs;
 	int cpl = ctxt->ops->cpl(ctxt);
-	struct desc_struct old_desc, new_desc;
-	const struct x86_emulate_ops *ops = ctxt->ops;
-
-	if (ctxt->mode == X86EMUL_MODE_PROT64)
-		ops->get_segment(ctxt, &old_cs, &old_desc, NULL,
-				 VCPU_SREG_CS);
+	struct desc_struct new_desc;
 
 	rc = emulate_pop(ctxt, &eip, ctxt->op_bytes);
 	if (rc != X86EMUL_CONTINUE)
@@ -2098,10 +2127,10 @@ static int em_ret_far(struct x86_emulate_ctxt *ctxt)
 	if (rc != X86EMUL_CONTINUE)
 		return rc;
 	rc = assign_eip_far(ctxt, eip, new_desc.l);
-	if (rc != X86EMUL_CONTINUE) {
-		WARN_ON(ctxt->mode != X86EMUL_MODE_PROT64);
-		ops->set_segment(ctxt, old_cs, &old_desc, 0, VCPU_SREG_CS);
-	}
+	/* Error handling is not implemented. */
+	if (rc != X86EMUL_CONTINUE)
+		return X86EMUL_UNHANDLEABLE;
+
 	return rc;
 }
 
@@ -2287,6 +2316,7 @@ static int em_syscall(struct x86_emulate_ctxt *ctxt)
 		ctxt->eflags &= ~(EFLG_VM | EFLG_IF | EFLG_RF);
 	}
 
+	ctxt->tf = (ctxt->eflags & X86_EFLAGS_TF) != 0;
 	return X86EMUL_CONTINUE;
 }
 
@@ -3257,8 +3287,8 @@ static int emulate_store_desc_ptr(struct x86_emulate_ctxt *ctxt,
 	}
 	/* Disable writeback. */
 	ctxt->dst.type = OP_NONE;
-	return segmented_write(ctxt, ctxt->dst.addr.mem,
-			       &desc_ptr, 2 + ctxt->op_bytes);
+	return segmented_write_std(ctxt, ctxt->dst.addr.mem,
+				   &desc_ptr, 2 + ctxt->op_bytes);
 }
 
 static int em_sgdt(struct x86_emulate_ctxt *ctxt)
@@ -3547,8 +3577,15 @@ static int check_dr_read(struct x86_emulate_ctxt *ctxt)
 	if ((cr4 & X86_CR4_DE) && (dr == 4 || dr == 5))
 		return emulate_ud(ctxt);
 
-	if (check_dr7_gd(ctxt))
+	if (check_dr7_gd(ctxt)) {
+		ulong dr6;
+
+		ctxt->ops->get_dr(ctxt, 6, &dr6);
+		dr6 &= ~15;
+		dr6 |= DR6_BD;
+		ctxt->ops->set_dr(ctxt, 6, dr6);
 		return emulate_db(ctxt);
+	}
 
 	return X86EMUL_CONTINUE;
 }
@@ -4592,9 +4629,9 @@ static int fastop(struct x86_emulate_ctxt *ctxt, void (*fop)(struct fastop *))
 	ulong flags = (ctxt->eflags & EFLAGS_MASK) | X86_EFLAGS_IF;
 	if (!(ctxt->d & ByteOp))
 		fop += __ffs(ctxt->dst.bytes) * FASTOP_SIZE;
-	asm("push %[flags]; popf; call *%[fastop]; pushf; pop %[flags]\n"
+	asm("push %[flags]; popf; " CALL_NOSPEC " ; pushf; pop %[flags]\n"
 	    : "+a"(ctxt->dst.val), "+d"(ctxt->src.val), [flags]"+D"(flags),
-	      [fastop]"+S"(fop)
+              [thunk_target]"+S"(fop)
 	    : "c"(ctxt->src2.val));
 	ctxt->eflags = (ctxt->eflags & ~EFLAGS_MASK) | (flags & EFLAGS_MASK);
 	if (!fop) /* exception is returned in fop variable */

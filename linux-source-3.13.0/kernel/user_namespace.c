@@ -22,6 +22,7 @@
 #include <linux/ctype.h>
 #include <linux/projid.h>
 #include <linux/fs_struct.h>
+#include <linux/nospec.h>
 
 /*
  * sysctl determining whether unprivileged users may unshare a new
@@ -499,8 +500,10 @@ static void *m_start(struct seq_file *seq, loff_t *ppos, struct uid_gid_map *map
 	struct uid_gid_extent *extent = NULL;
 	loff_t pos = *ppos;
 
-	if (pos < map->nr_extents)
+	if (pos < map->nr_extents) {
+		pos = array_index_nospec((unsigned long)pos, map->nr_extents); /* needed? */
 		extent = &map->extent[pos];
+	}
 
 	return extent;
 }

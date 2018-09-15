@@ -32,9 +32,6 @@ static efi_runtime_services_t *runtime;
 static u64 efi_system_table;
 
 static int uefi_debug __initdata;
-
-unsigned long arm64_efi_facility;
-
 static int __init uefi_debug_setup(char *str)
 {
 	uefi_debug = 1;
@@ -84,8 +81,8 @@ static int __init uefi_init(void)
 		return -ENOMEM;
 	}
 
-	set_bit(EFI_BOOT, &arm64_efi_facility);
-	set_bit(EFI_64BIT, &arm64_efi_facility);
+	set_bit(EFI_BOOT, &efi.flags);
+	set_bit(EFI_64BIT, &efi.flags);
 
 	/*
 	 * Verify the EFI Table
@@ -101,7 +98,7 @@ static int __init uefi_init(void)
 
 	/* Show what we know for posterity */
 	c16 = early_memremap(efi.systab->fw_vendor,
-			     sizeof(vendor));
+			     sizeof(vendor) * sizeof(efi_char16_t));
 	if (c16) {
 		for (i = 0; i < (int) sizeof(vendor) - 1 && *c16; ++i)
 			vendor[i] = c16[i];
@@ -114,9 +111,9 @@ static int __init uefi_init(void)
 
 	retval = efi_config_init(NULL);
 	if (retval == 0)
-		set_bit(EFI_CONFIG_TABLES, &arm64_efi_facility);
+		set_bit(EFI_CONFIG_TABLES, &efi.flags);
 
-	early_memunmap(c16, sizeof(vendor));
+	early_memunmap(c16, sizeof(vendor) * sizeof(efi_char16_t));
 	early_memunmap(efi.systab,  sizeof(efi_system_table_t));
 
 	return retval;
@@ -334,12 +331,6 @@ void __init efi_init(void)
 	reserve_regions();
 }
 
-int efi_enabled(int facility)
-{
-	return test_bit(facility, &arm64_efi_facility) != 0;
-}
-EXPORT_SYMBOL(efi_enabled);
-
 void __init efi_idmap_init(void)
 {
 	if (!efi_enabled(EFI_BOOT))
@@ -347,6 +338,7 @@ void __init efi_idmap_init(void)
 
 	/* boot time idmap_pg_dir is incomplete, so fill in missing parts */
 	efi_setup_idmap();
+	early_memunmap(memmap.map, memmap.map_end - memmap.map);
 }
 
 static int __init remap_region(efi_memory_desc_t *md, void **new)
@@ -404,7 +396,6 @@ static int __init arm64_enter_virtual_mode(void)
 
 	/* replace early memmap mapping with permanent mapping */
 	mapsize = memmap.map_end - memmap.map;
-	early_memunmap(memmap.map, mapsize);
 	memmap.map = (__force void *)ioremap_cache((phys_addr_t)memmap.phys_map,
 						   mapsize);
 	memmap.map_end = memmap.map + mapsize;
@@ -429,7 +420,7 @@ static int __init arm64_enter_virtual_mode(void)
 
 	efi.systab = (__force void *)efi_lookup_mapped_addr(efi_system_table);
 	if (efi.systab)
-		set_bit(EFI_SYSTEM_TABLES, &arm64_efi_facility);
+		set_bit(EFI_SYSTEM_TABLES, &efi.flags);
 
 	local_irq_save(flags);
 	cpu_switch_mm(idmap_pg_dir, &init_mm);
@@ -471,7 +462,9 @@ static int __init arm64_enter_virtual_mode(void)
 	efi.get_next_high_mono_count = runtime->get_next_high_mono_count;
 	efi.reset_system = runtime->reset_system;
 
-	set_bit(EFI_RUNTIME_SERVICES, &arm64_efi_facility);
+	set_bit(EFI_RUNTIME_SERVICES, &efi.flags);
+
+	efi.runtime_version = efi.systab->hdr.revision;
 
 	return 0;
 }

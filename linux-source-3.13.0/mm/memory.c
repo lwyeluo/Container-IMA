@@ -1456,6 +1456,16 @@ static struct page *no_page_table(struct vm_area_struct *vma,
 	return NULL;
 }
 
+/*
+ * FOLL_FORCE can write to even unwritable pte's, but only
+ * after we've gone through a COW cycle and they are dirty.
+ */
+static inline bool can_follow_write_pte(pte_t pte, unsigned int flags)
+{
+	return pte_write(pte) ||
+		((flags & FOLL_FORCE) && (flags & FOLL_COW) && pte_dirty(pte));
+}
+
 static struct page *follow_page_pte(struct vm_area_struct *vma,
 		unsigned long address, pmd_t *pmd, unsigned int flags)
 {
@@ -1490,7 +1500,7 @@ retry:
 	}
 	if ((flags & FOLL_NUMA) && pte_numa(pte))
 		goto no_page;
-	if ((flags & FOLL_WRITE) && !pte_write(pte)) {
+	if ((flags & FOLL_WRITE) && !can_follow_write_pte(pte, flags)) {
 		pte_unmap_unlock(ptep, ptl);
 		return NULL;
 	}
@@ -1631,12 +1641,6 @@ struct page *follow_page_mask(struct vm_area_struct *vma,
 			spin_unlock(ptl);
 	}
 	return follow_page_pte(vma, address, pmd, flags);
-}
-
-static inline int stack_guard_page(struct vm_area_struct *vma, unsigned long addr)
-{
-	return stack_guard_page_start(vma, addr) ||
-	       stack_guard_page_end(vma, addr+PAGE_SIZE);
 }
 
 /**
@@ -1806,11 +1810,9 @@ long __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
 				int ret;
 				unsigned int fault_flags = 0;
 
-				/* For mlock, just skip the stack guard page. */
-				if (foll_flags & FOLL_MLOCK) {
-					if (stack_guard_page(vma, start))
-						goto next_page;
-				}
+				/* mlock all present pages, but do not fault in new pages */
+				if (foll_flags & FOLL_MLOCK)
+					goto next_page;
 				if (foll_flags & FOLL_WRITE)
 					fault_flags |= FAULT_FLAG_WRITE;
 				if (nonblocking)
@@ -1866,7 +1868,7 @@ long __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
 				 */
 				if ((ret & VM_FAULT_WRITE) &&
 				    !(vma->vm_flags & VM_WRITE))
-					foll_flags &= ~FOLL_WRITE;
+					foll_flags |= FOLL_COW;
 
 				cond_resched();
 			}
@@ -2219,6 +2221,10 @@ int vm_insert_pfn(struct vm_area_struct *vma, unsigned long addr,
 
 	if (addr < vma->vm_start || addr >= vma->vm_end)
 		return -EFAULT;
+
+	if (!pfn_modify_allowed(pfn, pgprot))
+		return -EACCES;
+
 	if (track_pfn_insert(vma, &pgprot, pfn))
 		return -EINVAL;
 
@@ -2235,6 +2241,9 @@ int vm_insert_mixed(struct vm_area_struct *vma, unsigned long addr,
 
 	if (addr < vma->vm_start || addr >= vma->vm_end)
 		return -EFAULT;
+
+	if (!pfn_modify_allowed(pfn, vma->vm_page_prot))
+		return -EACCES;
 
 	/*
 	 * If we don't have pte special, then we have to use the pfn_valid()
@@ -2264,6 +2273,7 @@ static int remap_pte_range(struct mm_struct *mm, pmd_t *pmd,
 {
 	pte_t *pte;
 	spinlock_t *ptl;
+	int err = 0;
 
 	pte = pte_alloc_map_lock(mm, pmd, addr, &ptl);
 	if (!pte)
@@ -2271,12 +2281,16 @@ static int remap_pte_range(struct mm_struct *mm, pmd_t *pmd,
 	arch_enter_lazy_mmu_mode();
 	do {
 		BUG_ON(!pte_none(*pte));
+		if (!pfn_modify_allowed(pfn, prot)) {
+			err = -EACCES;
+			break;
+		}
 		set_pte_at(mm, addr, pte, pte_mkspecial(pfn_pte(pfn, prot)));
 		pfn++;
 	} while (pte++, addr += PAGE_SIZE, addr != end);
 	arch_leave_lazy_mmu_mode();
 	pte_unmap_unlock(pte - 1, ptl);
-	return 0;
+	return err;
 }
 
 static inline int remap_pmd_range(struct mm_struct *mm, pud_t *pud,
@@ -2285,6 +2299,7 @@ static inline int remap_pmd_range(struct mm_struct *mm, pud_t *pud,
 {
 	pmd_t *pmd;
 	unsigned long next;
+	int err;
 
 	pfn -= addr >> PAGE_SHIFT;
 	pmd = pmd_alloc(mm, pud, addr);
@@ -2293,9 +2308,10 @@ static inline int remap_pmd_range(struct mm_struct *mm, pud_t *pud,
 	VM_BUG_ON(pmd_trans_huge(*pmd));
 	do {
 		next = pmd_addr_end(addr, end);
-		if (remap_pte_range(mm, pmd, addr, next,
-				pfn + (addr >> PAGE_SHIFT), prot))
-			return -ENOMEM;
+		err = remap_pte_range(mm, pmd, addr, next,
+				pfn + (addr >> PAGE_SHIFT), prot);
+		if (err)
+			return err;
 	} while (pmd++, addr = next, addr != end);
 	return 0;
 }
@@ -2306,6 +2322,7 @@ static inline int remap_pud_range(struct mm_struct *mm, pgd_t *pgd,
 {
 	pud_t *pud;
 	unsigned long next;
+	int err;
 
 	pfn -= addr >> PAGE_SHIFT;
 	pud = pud_alloc(mm, pgd, addr);
@@ -2313,9 +2330,10 @@ static inline int remap_pud_range(struct mm_struct *mm, pgd_t *pgd,
 		return -ENOMEM;
 	do {
 		next = pud_addr_end(addr, end);
-		if (remap_pmd_range(mm, pud, addr, next,
-				pfn + (addr >> PAGE_SHIFT), prot))
-			return -ENOMEM;
+		err = remap_pmd_range(mm, pud, addr, next,
+				pfn + (addr >> PAGE_SHIFT), prot);
+		if (err)
+			return err;
 	} while (pud++, addr = next, addr != end);
 	return 0;
 }
@@ -3188,40 +3206,6 @@ out_release:
 }
 
 /*
- * This is like a special single-page "expand_{down|up}wards()",
- * except we must first make sure that 'address{-|+}PAGE_SIZE'
- * doesn't hit another vma.
- */
-static inline int check_stack_guard_page(struct vm_area_struct *vma, unsigned long address)
-{
-	address &= PAGE_MASK;
-	if ((vma->vm_flags & VM_GROWSDOWN) && address == vma->vm_start) {
-		struct vm_area_struct *prev = vma->vm_prev;
-
-		/*
-		 * Is there a mapping abutting this one below?
-		 *
-		 * That's only ok if it's the same stack mapping
-		 * that has gotten split..
-		 */
-		if (prev && prev->vm_end == address)
-			return prev->vm_flags & VM_GROWSDOWN ? 0 : -ENOMEM;
-
-		return expand_downwards(vma, address - PAGE_SIZE);
-	}
-	if ((vma->vm_flags & VM_GROWSUP) && address + PAGE_SIZE == vma->vm_end) {
-		struct vm_area_struct *next = vma->vm_next;
-
-		/* As VM_GROWSDOWN but s/below/above/ */
-		if (next && next->vm_start == address + PAGE_SIZE)
-			return next->vm_flags & VM_GROWSUP ? 0 : -ENOMEM;
-
-		return expand_upwards(vma, address + PAGE_SIZE);
-	}
-	return 0;
-}
-
-/*
  * We enter with non-exclusive mmap_sem (to exclude vma changes,
  * but allow concurrent faults), and pte mapped but not yet locked.
  * We return with mmap_sem still held, but pte unmapped and unlocked.
@@ -3236,9 +3220,9 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
 
 	pte_unmap(page_table);
 
-	/* Check if we need to add a guard page to the stack */
-	if (check_stack_guard_page(vma, address) < 0)
-		return VM_FAULT_SIGSEGV;
+	/* File mapping without ->vm_ops ? */
+	if (vma->vm_flags & VM_SHARED)
+		return VM_FAULT_SIGBUS;
 
 	/* Use the zero-page for reads */
 	if (!(flags & FAULT_FLAG_WRITE)) {
@@ -3508,6 +3492,9 @@ static int do_linear_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 			- vma->vm_start) >> PAGE_SHIFT) + vma->vm_pgoff;
 
 	pte_unmap(page_table);
+	/* The VMA was not fully populated on mmap() or missing VM_DONTEXPAND */
+	if (!vma->vm_ops->fault)
+		return VM_FAULT_SIGBUS;
 	return __do_fault(mm, vma, address, pmd, pgoff, flags, orig_pte);
 }
 
@@ -3656,11 +3643,9 @@ static int handle_pte_fault(struct mm_struct *mm,
 	entry = *pte;
 	if (!pte_present(entry)) {
 		if (pte_none(entry)) {
-			if (vma->vm_ops) {
-				if (likely(vma->vm_ops->fault))
-					return do_linear_fault(mm, vma, address,
+			if (vma->vm_ops)
+				return do_linear_fault(mm, vma, address,
 						pte, pmd, flags, entry);
-			}
 			return do_anonymous_page(mm, vma, address,
 						 pte, pmd, flags);
 		}

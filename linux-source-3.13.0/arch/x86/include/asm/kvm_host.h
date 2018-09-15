@@ -17,6 +17,7 @@
 #include <linux/tracepoint.h>
 #include <linux/cpumask.h>
 #include <linux/irq_work.h>
+#include <linux/irq.h>
 
 #include <linux/kvm.h>
 #include <linux/kvm_para.h>
@@ -477,6 +478,8 @@ struct kvm_vcpu_arch {
 	u64 mcg_ctl;
 	u64 *mce_banks;
 
+	u64 spec_ctrl;
+
 	/* Cache MMIO info */
 	u64 mmio_gva;
 	unsigned access;
@@ -530,6 +533,9 @@ struct kvm_vcpu_arch {
 	struct {
 		bool pv_unhalted;
 	} pv;
+
+	/* Flush the L1 Data cache for L1TF mitigation on VMENTER */
+	bool l1tf_flush_l1d;
 };
 
 struct kvm_lpage_info {
@@ -638,6 +644,7 @@ struct kvm_vcpu_stat {
 	u32 signal_exits;
 	u32 irq_window_exits;
 	u32 nmi_window_exits;
+	u32 l1d_flush;
 	u32 halt_exits;
 	u32 halt_wakeup;
 	u32 request_irq_exits;
@@ -669,7 +676,11 @@ struct kvm_x86_ops {
 	int (*hardware_setup)(void);               /* __init */
 	void (*hardware_unsetup)(void);            /* __exit */
 	bool (*cpu_has_accelerated_tpr)(void);
+	bool (*has_emulated_msr)(int index);
 	void (*cpuid_update)(struct kvm_vcpu *vcpu);
+
+	int (*vm_init)(struct kvm *kvm);
+	void (*vm_destroy)(struct kvm *kvm);
 
 	/* Create, but do not attach this VCPU */
 	struct kvm_vcpu *(*vcpu_create)(struct kvm *kvm, unsigned id);

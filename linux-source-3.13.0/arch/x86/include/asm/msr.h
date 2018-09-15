@@ -205,8 +205,13 @@ do {                                                            \
 
 #endif	/* !CONFIG_PARAVIRT */
 
-#define wrmsrl_safe(msr, val) wrmsr_safe((msr), (u32)(val),		\
-					     (u32)((val) >> 32))
+/*
+ * 64-bit version of wrmsr_safe():
+ */
+static inline int wrmsrl_safe(u32 msr, u64 val)
+{
+	return wrmsr_safe(msr, (u32)val,  (u32)(val >> 32));
+}
 
 #define write_tsc(low, high) wrmsr(MSR_IA32_TSC, (low), (high))
 
@@ -214,6 +219,8 @@ do {                                                            \
 
 struct msr *msrs_alloc(void);
 void msrs_free(struct msr *msrs);
+int msr_set_bit(u32 msr, u8 bit);
+int msr_clear_bit(u32 msr, u8 bit);
 
 #ifdef CONFIG_SMP
 int rdmsr_on_cpu(unsigned int cpu, u32 msr_no, u32 *l, u32 *h);

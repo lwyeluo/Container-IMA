@@ -20,6 +20,7 @@
 #include <linux/ioport.h>
 #include <linux/pfn.h>
 #include <linux/pstore.h>
+#include <linux/reboot.h>
 
 #include <asm/page.h>
 
@@ -814,6 +815,9 @@ extern struct efi {
 	unsigned long hcdp;		/* HCDP table */
 	unsigned long uga;		/* UGA table */
 	unsigned long uv_systab;	/* UV system table */
+	unsigned long fw_vendor;	/* fw_vendor */
+	unsigned long runtime;		/* runtime table */
+	unsigned long config_table;	/* config tables */
 	efi_get_time_t *get_time;
 	efi_set_time_t *set_time;
 	efi_get_wakeup_time_t *get_wakeup_time;
@@ -828,6 +832,7 @@ extern struct efi {
 	efi_reset_system_t *reset_system;
 	efi_set_virtual_address_map_t *set_virtual_address_map;
 	struct efi_memory_map *memmap;
+	unsigned long flags;
 } efi;
 
 static inline int
@@ -877,6 +882,9 @@ extern void efi_reserve_boot_services(void);
 extern int efi_get_fdt_params(struct efi_fdt_params *params, int verbose);
 extern struct efi_memory_map memmap;
 
+extern int efi_reboot_quirk_mode;
+extern bool efi_poweroff_required(void);
+
 /* Iterate through an efi_memory_map */
 #define for_each_efi_memory_desc(m, md)					   \
 	for ((md) = (m)->map;						   \
@@ -925,19 +933,21 @@ extern int __init efi_setup_pcdp_console(char *);
 #define EFI_MOKSBSTATE_DISABLED	11	/* Secure boot mode disabled in the MOK */
 
 #ifdef CONFIG_EFI
-# if defined(CONFIG_X86) || defined (CONFIG_ARM64)
-extern int efi_enabled(int facility);
-# else
-static inline int efi_enabled(int facility)
+/*
+ * Test whether the above EFI_* bits are enabled.
+ */
+static inline bool efi_enabled(int feature)
 {
-	return 1;
+	return test_bit(feature, &efi.flags) != 0;
 }
-# endif
+extern void efi_reboot(enum reboot_mode reboot_mode, const char *__unused);
 #else
-static inline int efi_enabled(int facility)
+static inline bool efi_enabled(int feature)
 {
-	return 0;
+	return false;
 }
+static inline void
+efi_reboot(enum reboot_mode reboot_mode, const char *__unused) {}
 #endif
 
 /*
@@ -1058,8 +1068,10 @@ struct efivars {
  * and we use a page for reading/writing.
  */
 
+#define EFI_VAR_NAME_LEN	1024
+
 struct efi_variable {
-	efi_char16_t  VariableName[1024/sizeof(efi_char16_t)];
+	efi_char16_t  VariableName[EFI_VAR_NAME_LEN/sizeof(efi_char16_t)];
 	efi_guid_t    VendorGuid;
 	unsigned long DataSize;
 	__u8          Data[1024];
@@ -1141,7 +1153,8 @@ int efivar_entry_iter(int (*func)(struct efivar_entry *, void *),
 struct efivar_entry *efivar_entry_find(efi_char16_t *name, efi_guid_t guid,
 				       struct list_head *head, bool remove);
 
-bool efivar_validate(struct efi_variable *var, u8 *data, unsigned long len);
+bool efivar_validate(efi_guid_t vendor, efi_char16_t *var_name, u8 *data,
+		     unsigned long data_size);
 
 extern struct work_struct efivar_work;
 void efivar_run_worker(void);
@@ -1152,5 +1165,18 @@ int efivars_sysfs_init(void);
 #define EFIVARS_DATA_SIZE_MAX 1024
 
 #endif /* CONFIG_EFI_VARS */
+
+#ifdef CONFIG_EFI_RUNTIME_MAP
+int efi_runtime_map_init(struct kobject *);
+void efi_runtime_map_setup(void *, int, u32);
+#else
+static inline int efi_runtime_map_init(struct kobject *kobj)
+{
+	return 0;
+}
+
+static inline void
+efi_runtime_map_setup(void *map, int nr_entries, u32 desc_size) {}
+#endif
 
 #endif /* _LINUX_EFI_H */

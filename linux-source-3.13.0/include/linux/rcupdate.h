@@ -554,7 +554,6 @@ static inline void rcu_preempt_sleep_check(void)
 		(p) = (typeof(*v) __force space *)(v); \
 	} while (0)
 
-
 /**
  * rcu_access_pointer() - fetch RCU pointer with no dereferencing
  * @p: The pointer to read

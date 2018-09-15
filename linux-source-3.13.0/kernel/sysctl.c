@@ -64,14 +64,18 @@
 #include <linux/sched/sysctl.h>
 #include <linux/kexec.h>
 #include <linux/efi.h>
+#include <linux/mount.h>
 
 #include <asm/uaccess.h>
+#include <linux/mutex.h>
 #include <asm/processor.h>
 
 #ifdef CONFIG_X86
+#include <asm/msr.h>
 #include <asm/nmi.h>
 #include <asm/stacktrace.h>
 #include <asm/io.h>
+#include <asm/spec-ctrl.h>
 #endif
 #ifdef CONFIG_SPARC
 #include <asm/setup.h>
@@ -194,6 +198,13 @@ static int proc_dostring_coredump(struct ctl_table *table, int write,
 		void __user *buffer, size_t *lenp, loff_t *ppos);
 #endif
 
+#ifdef CONFIG_X86
+int proc_dointvec_ibrs_ctrl(struct ctl_table *table, int write,
+                 void __user *buffer, size_t *lenp, loff_t *ppos);
+int proc_dointvec_ibpb_ctrl(struct ctl_table *table, int write,
+                 void __user *buffer, size_t *lenp, loff_t *ppos);
+#endif
+
 #ifdef CONFIG_MAGIC_SYSRQ
 /* Note: sysrq code uses it's own private copy */
 static int __sysrq_enabled = CONFIG_MAGIC_SYSRQ_DEFAULT_ENABLE;
@@ -229,6 +240,11 @@ extern struct ctl_table epoll_table[];
 #ifdef HAVE_ARCH_PICK_MMAP_LAYOUT
 int sysctl_legacy_va_layout;
 #endif
+
+u32 sysctl_ibrs_enabled = 0;
+EXPORT_SYMBOL(sysctl_ibrs_enabled);
+u32 sysctl_ibpb_enabled = 0;
+EXPORT_SYMBOL(sysctl_ibpb_enabled);
 
 /* The default sysctl tables: */
 
@@ -1145,6 +1161,26 @@ static struct ctl_table kern_table[] = {
 		.proc_handler	= proc_dointvec,
 	},
 #endif
+#ifdef CONFIG_X86
+	{
+		.procname       = "ibrs_enabled",
+		.data           = &sysctl_ibrs_enabled,
+		.maxlen         = sizeof(unsigned int),
+		.mode           = 0644,
+		.proc_handler   = proc_dointvec_ibrs_ctrl,
+		.extra1         = &zero,
+		.extra2         = &two,
+	},
+	{
+		.procname       = "ibpb_enabled",
+		.data           = &sysctl_ibpb_enabled,
+		.maxlen         = sizeof(unsigned int),
+		.mode           = 0644,
+		.proc_handler   = proc_dointvec_ibpb_ctrl,
+		.extra1         = &zero,
+		.extra2         = &one,
+	},
+#endif
 	{ }
 };
 
@@ -1712,6 +1748,14 @@ static struct ctl_table fs_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_doulongvec_minmax,
 	},
+	{
+		.procname	= "mount-max",
+		.data		= &sysctl_mount_max,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &one,
+	},
 	{ }
 };
 
@@ -2205,6 +2249,69 @@ int proc_dointvec_minmax(struct ctl_table *table, int write,
 	return do_proc_dointvec(table, write, buffer, lenp, ppos,
 				do_proc_dointvec_minmax_conv, &param);
 }
+
+#ifdef CONFIG_X86
+int proc_dointvec_ibrs_ctrl(struct ctl_table *table, int write,
+	void __user *buffer, size_t *lenp, loff_t *ppos)
+{
+	int ret;
+	unsigned int cpu;
+
+	ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
+	pr_debug("sysctl_ibrs_enabled = %u, sysctl_ibpb_enabled = %u\n", sysctl_ibrs_enabled, sysctl_ibpb_enabled);
+	pr_debug("before:use_ibrs = %d, use_ibpb = %d\n", use_ibrs, use_ibpb);
+	mutex_lock(&spec_ctrl_mutex);
+	if (sysctl_ibrs_enabled == 0) {
+		/* always set IBRS off */
+		set_ibrs_disabled();
+		if (ibrs_supported) {
+			for_each_online_cpu(cpu)
+				wrmsrl_on_cpu(cpu, MSR_IA32_SPEC_CTRL, x86_spec_ctrl_base);
+		}
+	} else if (sysctl_ibrs_enabled == 2) {
+		/* always set IBRS on, even in user space */
+		clear_ibrs_disabled();
+		if (ibrs_supported) {
+			for_each_online_cpu(cpu)
+				wrmsrl_on_cpu(cpu, MSR_IA32_SPEC_CTRL, x86_spec_ctrl_base | SPEC_CTRL_IBRS);
+		} else {
+			sysctl_ibrs_enabled = 0;
+		}
+	} else if (sysctl_ibrs_enabled == 1) {
+		/* use IBRS in kernel */
+		clear_ibrs_disabled();
+		if (!ibrs_inuse)
+			/* platform don't support ibrs */
+			sysctl_ibrs_enabled = 0;
+	}
+	mutex_unlock(&spec_ctrl_mutex);
+	pr_debug("after:use_ibrs = %d, use_ibpb = %d\n", use_ibrs, use_ibpb);
+	return ret;
+}
+
+int proc_dointvec_ibpb_ctrl(struct ctl_table *table, int write,
+	void __user *buffer, size_t *lenp, loff_t *ppos)
+{
+	int ret;
+
+	ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
+	pr_debug("sysctl_ibrs_enabled = %u, sysctl_ibpb_enabled = %u\n", sysctl_ibrs_enabled, sysctl_ibpb_enabled);
+	pr_debug("before:use_ibrs = %d, use_ibpb = %d\n", use_ibrs, use_ibpb);
+	mutex_lock(&spec_ctrl_mutex);
+	if (sysctl_ibpb_enabled == 0)
+		set_ibpb_disabled();
+	else if (sysctl_ibpb_enabled == 1) {
+		clear_ibpb_disabled();
+		if (!ibpb_inuse)
+			/* platform don't support ibpb */
+			sysctl_ibpb_enabled = 0;
+	}
+	mutex_unlock(&spec_ctrl_mutex);
+	pr_debug("after:use_ibrs = %d, use_ibpb = %d\n", use_ibrs, use_ibpb);
+	return ret;
+}
+#endif
+
 
 static void validate_coredump_safety(void)
 {

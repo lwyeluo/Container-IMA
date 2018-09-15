@@ -66,20 +66,25 @@ enum {
 
 #define NVME_VS(major, minor)	(major << 16 | minor)
 
-#define NVME_IO_TIMEOUT	(5 * HZ)
+extern unsigned int io_timeout;
+#define NVME_IO_TIMEOUT	(io_timeout * HZ)
 
 /*
  * Represents an NVM Express device.  Each nvme_dev is a PCI function.
  */
 struct nvme_dev {
 	struct list_head node;
-	struct nvme_queue **queues;
+	struct nvme_queue __rcu **queues;
+	unsigned short __percpu *io_queue;
 	u32 __iomem *dbs;
 	struct pci_dev *pci_dev;
 	struct dma_pool *prp_page_pool;
 	struct dma_pool *prp_small_pool;
 	int instance;
-	int queue_count;
+	unsigned queue_count;
+	unsigned online_queues;
+	unsigned max_qid;
+	int q_depth;
 	u32 db_stride;
 	u32 ctrl_config;
 	struct msix_entry *entry;
@@ -151,10 +156,7 @@ struct nvme_iod *nvme_map_user_pages(struct nvme_dev *dev, int write,
 				unsigned long addr, unsigned length);
 void nvme_unmap_user_pages(struct nvme_dev *dev, int write,
 			struct nvme_iod *iod);
-struct nvme_queue *get_nvmeq(struct nvme_dev *dev);
-void put_nvmeq(struct nvme_queue *nvmeq);
-int nvme_submit_sync_cmd(struct nvme_queue *nvmeq, struct nvme_command *cmd,
-						u32 *result, unsigned timeout);
+int nvme_submit_io_cmd(struct nvme_dev *, struct nvme_command *, u32 *);
 int nvme_submit_flush_data(struct nvme_queue *nvmeq, struct nvme_ns *ns);
 int nvme_submit_admin_cmd(struct nvme_dev *, struct nvme_command *,
 							u32 *result);

@@ -268,7 +268,7 @@ static int ima_cpcr_bind(void) {
 
 	crypto_shash_final(&desc.shash, digest);
 
-	printk("[Wu Luo] successfully calculate the digest of cPCRs\n");
+	// printk("[Wu Luo] successfully calculate the digest of cPCRs\n");
 
 	// extend the digest into physical PCR
 	rc = ima_pcr_extend(CONFIG_IMA_CPCR_BIND_PCR_IDX, digest);

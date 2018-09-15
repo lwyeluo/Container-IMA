@@ -34,6 +34,7 @@
  * exception handlers (including pSeries LPAR) and iSeries LPAR
  * implementations as possible.
  */
+#include <asm/bug.h>
 
 #define EX_R9		0
 #define EX_R10		8
@@ -49,6 +50,101 @@
 #define EX_CFAR		80
 #define EX_PPR		88	/* SMT thread status register (priority) */
 #define EX_CTR		96
+
+#define STF_ENTRY_BARRIER_SLOT						\
+	STF_ENTRY_BARRIER_FIXUP_SECTION;				\
+	mflr	r10;							\
+	bl	stf_barrier_fallback;					\
+	mtlr	r10
+
+#define STF_EXIT_BARRIER_SLOT						\
+	STF_EXIT_BARRIER_FIXUP_SECTION;					\
+	nop;								\
+	nop;								\
+	nop;								\
+	nop;								\
+	nop;								\
+	nop
+
+/*
+ * r10 must be free to use, r13 must be paca
+ */
+#define INTERRUPT_TO_KERNEL						\
+	STF_ENTRY_BARRIER_SLOT
+
+/*
+ * The nop instructions allow us to insert one or more instructions to flush the
+ * L1-D cache when return to userspace or a guest.
+ */
+#define RFI_FLUSH_SLOT							\
+	RFI_FLUSH_FIXUP_SECTION;					\
+	nop;								\
+	nop;								\
+	nop
+
+#ifdef CONFIG_PPC_DEBUG_RFI
+#define CHECK_TARGET_MSR_PR(srr_reg, expected_pr)			\
+	SET_SCRATCH0(r3);						\
+	mfspr	r3,srr_reg;						\
+	extrdi	r3,r3,1,63-MSR_PR_LG;					\
+666:	tdnei	r3,expected_pr;						\
+	EMIT_BUG_ENTRY 666b,__FILE__,__LINE__,0;			\
+	GET_SCRATCH0(r3);
+#else
+#define CHECK_TARGET_MSR_PR(srr_reg, expected_pr)
+#endif
+
+#define RFI_TO_KERNEL							\
+	CHECK_TARGET_MSR_PR(SPRN_SRR1, 0);				\
+	rfid
+
+#define RFI_TO_USER							\
+	CHECK_TARGET_MSR_PR(SPRN_SRR1, 1);				\
+	STF_EXIT_BARRIER_SLOT;						\
+	RFI_FLUSH_SLOT;							\
+	rfid;								\
+	b	rfi_flush_fallback
+
+#define RFI_TO_USER_OR_KERNEL						\
+	STF_EXIT_BARRIER_SLOT;						\
+	RFI_FLUSH_SLOT;							\
+	rfid;								\
+	b	rfi_flush_fallback
+
+#define RFI_TO_GUEST							\
+	STF_EXIT_BARRIER_SLOT;						\
+	RFI_FLUSH_SLOT;							\
+	rfid;								\
+	b	rfi_flush_fallback
+
+#define HRFI_TO_KERNEL							\
+	CHECK_TARGET_MSR_PR(SPRN_HSRR1, 0);				\
+	hrfid
+
+#define HRFI_TO_USER							\
+	CHECK_TARGET_MSR_PR(SPRN_HSRR1, 1);				\
+	STF_EXIT_BARRIER_SLOT;						\
+	RFI_FLUSH_SLOT;							\
+	hrfid;								\
+	b	hrfi_flush_fallback
+
+#define HRFI_TO_USER_OR_KERNEL						\
+	STF_EXIT_BARRIER_SLOT;						\
+	RFI_FLUSH_SLOT;							\
+	hrfid;								\
+	b	hrfi_flush_fallback
+
+#define HRFI_TO_GUEST							\
+	STF_EXIT_BARRIER_SLOT;						\
+	RFI_FLUSH_SLOT;							\
+	hrfid;								\
+	b	hrfi_flush_fallback
+
+#define HRFI_TO_UNKNOWN							\
+	STF_EXIT_BARRIER_SLOT;						\
+	RFI_FLUSH_SLOT;							\
+	hrfid;								\
+	b	hrfi_flush_fallback
 
 #ifdef CONFIG_RELOCATABLE
 #define __EXCEPTION_RELON_PROLOG_PSERIES_1(label, h)			\
@@ -173,6 +269,7 @@ END_FTR_SECTION_NESTED(ftr,ftr,943)
 #define __EXCEPTION_PROLOG_1(area, extra, vec)				\
 	OPT_SAVE_REG_TO_PACA(area+EX_PPR, r9, CPU_FTR_HAS_PPR);		\
 	OPT_SAVE_REG_TO_PACA(area+EX_CFAR, r10, CPU_FTR_CFAR);		\
+	INTERRUPT_TO_KERNEL;						\
 	SAVE_CTR(r10, area);						\
 	mfcr	r9;							\
 	extra(vec);							\
@@ -191,13 +288,17 @@ END_FTR_SECTION_NESTED(ftr,ftr,943)
 	mtspr	SPRN_##h##SRR0,r12;					\
 	mfspr	r12,SPRN_##h##SRR1;	/* and SRR1 */			\
 	mtspr	SPRN_##h##SRR1,r10;					\
-	h##rfid;							\
+	h##RFI_TO_KERNEL;						\
 	b	.	/* prevent speculative execution */
 #define EXCEPTION_PROLOG_PSERIES_1(label, h)				\
 	__EXCEPTION_PROLOG_PSERIES_1(label, h)
 
 #define EXCEPTION_PROLOG_PSERIES(area, label, h, extra, vec)		\
 	EXCEPTION_PROLOG_0(area);					\
+	EXCEPTION_PROLOG_1(area, extra, vec);				\
+	EXCEPTION_PROLOG_PSERIES_1(label, h);
+
+#define EXCEPTION_PROLOG_PSERIES_OOL(area, label, h, extra, vec)	\
 	EXCEPTION_PROLOG_1(area, extra, vec);				\
 	EXCEPTION_PROLOG_PSERIES_1(label, h);
 
@@ -447,6 +548,13 @@ label##_relon_hv:						\
 
 #define SOFTEN_NOTEST_PR(vec)		_SOFTEN_TEST(EXC_STD, vec)
 #define SOFTEN_NOTEST_HV(vec)		_SOFTEN_TEST(EXC_HV, vec)
+
+#define __MASKABLE_EXCEPTION_PSERIES_OOL(vec, label, h, extra)		\
+	__EXCEPTION_PROLOG_1(PACA_EXGEN, extra, vec);			\
+	EXCEPTION_PROLOG_PSERIES_1(label##_common, h);
+
+#define _MASKABLE_EXCEPTION_PSERIES_OOL(vec, label, h, extra)		\
+	__MASKABLE_EXCEPTION_PSERIES_OOL(vec, label, h, extra)
 
 #define __MASKABLE_EXCEPTION_PSERIES(vec, label, h, extra)		\
 	SET_SCRATCH0(r13);    /* save r13 */				\

@@ -83,7 +83,7 @@ static int efivarfs_d_hash(const struct dentry *dentry, struct qstr *qstr)
 	return 0;
 }
 
-static struct dentry_operations efivarfs_d_ops = {
+static const struct dentry_operations efivarfs_d_ops = {
 	.d_compare = efivarfs_d_compare,
 	.d_hash = efivarfs_d_hash,
 	.d_delete = always_delete_dentry,
@@ -118,7 +118,7 @@ static int efivarfs_callback(efi_char16_t *name16, efi_guid_t vendor,
 	struct dentry *dentry, *root = sb->s_root;
 	unsigned long size = 0;
 	char *name;
-	int len, i;
+	int len;
 	int err = -ENOMEM;
 
 	entry = kzalloc(sizeof(*entry), GFP_KERNEL);
@@ -128,15 +128,14 @@ static int efivarfs_callback(efi_char16_t *name16, efi_guid_t vendor,
 	memcpy(entry->var.VariableName, name16, name_size);
 	memcpy(&(entry->var.VendorGuid), &vendor, sizeof(efi_guid_t));
 
-	len = ucs2_strlen(entry->var.VariableName);
+	len = ucs2_utf8size(entry->var.VariableName);
 
 	/* name, plus '-', plus GUID, plus NUL*/
 	name = kmalloc(len + 1 + EFI_VARIABLE_GUID_LEN + 1, GFP_KERNEL);
 	if (!name)
 		goto fail;
 
-	for (i = 0; i < len; i++)
-		name[i] = entry->var.VariableName[i] & 0xFF;
+	ucs2_as_utf8(name, entry->var.VariableName, len);
 
 	name[len] = '-';
 

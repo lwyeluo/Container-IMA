@@ -147,7 +147,7 @@ int copy_namespaces(unsigned long flags, struct task_struct *tsk)
 	 * it along with CLONE_NEWIPC.
 	 */
 	if ((flags & (CLONE_NEWIPC | CLONE_SYSVSEM)) ==
-		(CLONE_NEWIPC | CLONE_SYSVSEM))
+		(CLONE_NEWIPC | CLONE_SYSVSEM)) 
 		return -EINVAL;
 
 	new_ns = create_new_namespaces(flags, tsk, user_ns, tsk->fs);
@@ -155,22 +155,7 @@ int copy_namespaces(unsigned long flags, struct task_struct *tsk)
 		return  PTR_ERR(new_ns);
 
 	tsk->nsproxy = new_ns;
-
-	if (new_ns->pid_ns_for_children)
-		put_pid_ns(new_ns->pid_ns_for_children);
-
-	if (new_ns->ipc_ns)
-		put_ipc_ns(new_ns->ipc_ns);
-
-	if (new_ns->uts_ns)
-		put_uts_ns(new_ns->uts_ns);
-
-	if (new_ns->mnt_ns)
-		put_mnt_ns(new_ns->mnt_ns);
-
-	kmem_cache_free(nsproxy_cachep, new_ns);
-
-	return PTR_ERR(new_ns);
+	return 0;
 }
 
 void free_nsproxy(struct nsproxy *ns)
@@ -183,16 +168,6 @@ void free_nsproxy(struct nsproxy *ns)
 		put_ipc_ns(ns->ipc_ns);
 	if (ns->pid_ns_for_children)
 		put_pid_ns(ns->pid_ns_for_children);
-//	if (ns->pid_ns_for_children) {
-//		if(ns->pid_ns_for_children->cpcr) {
-//			if(!IS_ERR(ns->pid_ns_for_children->cpcr->tfm)) {
-//				printk("[Wu Luo] now we do not free the cpcr->tfm, may exists some warning\n");
-//				//crypto_free_shash(ns->pid_ns_for_children->cpcr->tfm);
-//			}
-//			kfree(ns->pid_ns_for_children->cpcr);
-//		}
-//		put_pid_ns(ns->pid_ns_for_children);
-//	}
 	put_net(ns->net_ns);
 	kmem_cache_free(nsproxy_cachep, ns);
 }

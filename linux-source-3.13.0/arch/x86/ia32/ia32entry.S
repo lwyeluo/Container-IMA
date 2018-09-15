@@ -15,8 +15,12 @@
 #include <asm/irqflags.h>
 #include <asm/asm.h>
 #include <asm/smap.h>
+#include <asm/pgtable_types.h>
+#include <asm/kaiser.h>
+#include <asm/spec_ctrl.h>
 #include <linux/linkage.h>
 #include <linux/err.h>
+#include <asm/nospec-branch.h>
 
 /* Avoid __ASSEMBLER__'ifying <linux/audit.h> just for this.  */
 #include <linux/elf-em.h>
@@ -121,8 +125,11 @@ ENTRY(ia32_sysenter_target)
 	CFI_DEF_CFA	rsp,0
 	CFI_REGISTER	rsp,rbp
 	SWAPGS_UNSAFE_STACK
+	SWITCH_KERNEL_CR3_NO_STACK
 	movq	PER_CPU_VAR(kernel_stack), %rsp
 	addq	$(KERNEL_STACK_OFFSET),%rsp
+	ENABLE_IBRS
+	STUFF_RSB
 	/*
 	 * No need to follow this irqs on/off section: the syscall
 	 * disabled irqs, here we enable it straight after entry:
@@ -165,12 +172,19 @@ sysenter_flags_fixed:
 	testl   $_TIF_WORK_SYSCALL_ENTRY,TI_flags+THREAD_INFO(%rsp,RIP-ARGOFFSET)
 	CFI_REMEMBER_STATE
 	jnz  sysenter_tracesys
-	cmpq	$(IA32_NR_syscalls-1),%rax
-	ja	ia32_badsys
+	cmpq	$(IA32_NR_syscalls),%rax
+	jae	ia32_badsys
 sysenter_do_call:
+	sbb	%r8,%r8				/* array_index_mask_nospec() */
+	and	%r8,%rax
 	IA32_ARG_FIXUP
 sysenter_dispatch:
+#ifdef CONFIG_RETPOLINE
+	movq	ia32_sys_call_table(,%rax,8),%rax
+	call	__x86_indirect_thunk_rax
+#else
 	call	*ia32_sys_call_table(,%rax,8)
+#endif
 	movq	%rax,RAX-ARGOFFSET(%rsp)
 	DISABLE_INTERRUPTS(CLBR_NONE)
 	TRACE_IRQS_OFF
@@ -192,6 +206,8 @@ sysexit_from_sys_call:
 	popq_cfi %rcx				/* User %esp */
 	CFI_REGISTER rsp,rcx
 	TRACE_IRQS_ON
+	DISABLE_IBRS
+	SWITCH_USER_CR3
 	ENABLE_INTERRUPTS_SYSEXIT32
 
 	CFI_RESTORE_STATE
@@ -206,8 +222,10 @@ sysexit_from_sys_call:
 	movl $AUDIT_ARCH_I386,%edi	/* 1st arg: audit arch */
 	call __audit_syscall_entry
 	movl RAX-ARGOFFSET(%rsp),%eax	/* reload syscall number */
-	cmpq $(IA32_NR_syscalls-1),%rax
-	ja ia32_badsys
+	cmpq $(IA32_NR_syscalls),%rax
+	jae  ia32_badsys
+	sbb  %r8,%r8			/* array_index_mask_nospec() */
+	and  %r8,%rax
 	movl %ebx,%edi			/* reload 1st syscall arg */
 	movl RCX-ARGOFFSET(%rsp),%esi	/* reload 2nd syscall arg */
 	movl RDX-ARGOFFSET(%rsp),%edx	/* reload 3rd syscall arg */
@@ -263,8 +281,8 @@ sysenter_tracesys:
 	call	syscall_trace_enter
 	LOAD_ARGS32 ARGOFFSET  /* reload args from stack in case ptrace changed it */
 	RESTORE_REST
-	cmpq	$(IA32_NR_syscalls-1),%rax
-	ja	int_ret_from_sys_call /* sysenter_tracesys has set RAX(%rsp) */
+	cmpq	$(IA32_NR_syscalls),%rax
+	jae	int_ret_from_sys_call /* sysenter_tracesys has set RAX(%rsp) */
 	jmp	sysenter_do_call
 	CFI_ENDPROC
 ENDPROC(ia32_sysenter_target)
@@ -296,9 +314,12 @@ ENTRY(ia32_cstar_target)
 	CFI_REGISTER	rip,rcx
 	/*CFI_REGISTER	rflags,r11*/
 	SWAPGS_UNSAFE_STACK
+	SWITCH_KERNEL_CR3_NO_STACK
 	movl	%esp,%r8d
 	CFI_REGISTER	rsp,r8
 	movq	PER_CPU_VAR(kernel_stack),%rsp
+	ENABLE_IBRS
+	STUFF_RSB
 	/*
 	 * No need to follow this irqs on/off section: the syscall
 	 * disabled irqs and here we enable it straight after entry:
@@ -328,12 +349,19 @@ ENTRY(ia32_cstar_target)
 	testl   $_TIF_WORK_SYSCALL_ENTRY,TI_flags+THREAD_INFO(%rsp,RIP-ARGOFFSET)
 	CFI_REMEMBER_STATE
 	jnz   cstar_tracesys
-	cmpq $IA32_NR_syscalls-1,%rax
-	ja  ia32_badsys
+	cmpq $IA32_NR_syscalls,%rax
+	jae  ia32_badsys
 cstar_do_call:
+	sbb  %r8,%r8				/* array_index_mask_nospec() */
+	and  %r8,%rax
 	IA32_ARG_FIXUP 1
 cstar_dispatch:
+#ifdef CONFIG_RETPOLINE
+	movq ia32_sys_call_table(,%rax,8),%rax
+	call __x86_indirect_thunk_rax
+#else
 	call *ia32_sys_call_table(,%rax,8)
+#endif
 	movq %rax,RAX-ARGOFFSET(%rsp)
 	DISABLE_INTERRUPTS(CLBR_NONE)
 	TRACE_IRQS_OFF
@@ -350,6 +378,8 @@ sysretl_from_sys_call:
 	xorq	%r9,%r9
 	xorq	%r8,%r8
 	TRACE_IRQS_ON
+	DISABLE_IBRS
+	SWITCH_USER_CR3
 	movl RSP-ARGOFFSET(%rsp),%esp
 	CFI_RESTORE rsp
 	USERGS_SYSRET32
@@ -380,8 +410,8 @@ cstar_tracesys:
 	LOAD_ARGS32 ARGOFFSET, 1  /* reload args from stack in case ptrace changed it */
 	RESTORE_REST
 	xchgl %ebp,%r9d
-	cmpq $(IA32_NR_syscalls-1),%rax
-	ja int_ret_from_sys_call /* cstar_tracesys has set RAX(%rsp) */
+	cmpq $(IA32_NR_syscalls),%rax
+	jae int_ret_from_sys_call /* cstar_tracesys has set RAX(%rsp) */
 	jmp cstar_do_call
 END(ia32_cstar_target)
 				
@@ -424,6 +454,9 @@ ENTRY(ia32_syscall)
 	PARAVIRT_ADJUST_EXCEPTION_FRAME
 	ASM_CLAC			/* Do this early to minimize exposure */
 	SWAPGS
+	SWITCH_KERNEL_CR3_NO_STACK
+	ENABLE_IBRS
+	STUFF_RSB
 	/*
 	 * No need to follow this irqs on/off section: the syscall
 	 * disabled irqs and here we enable it straight after entry:
@@ -438,11 +471,18 @@ ENTRY(ia32_syscall)
 	orl $TS_COMPAT,TI_status+THREAD_INFO(%rsp,RIP-ARGOFFSET)
 	testl $_TIF_WORK_SYSCALL_ENTRY,TI_flags+THREAD_INFO(%rsp,RIP-ARGOFFSET)
 	jnz ia32_tracesys
-	cmpq $(IA32_NR_syscalls-1),%rax
-	ja ia32_badsys
+	cmpq $(IA32_NR_syscalls),%rax
+	jae  ia32_badsys
 ia32_do_call:
+	sbb  %r8,%r8				/* array_index_mask_nospec() */
+	and  %r8,%rax
 	IA32_ARG_FIXUP
+#ifdef CONFIG_RETPOLINE
+	movq ia32_sys_call_table(,%rax,8),%rax
+	call __x86_indirect_thunk_rax
+#else
 	call *ia32_sys_call_table(,%rax,8) # xxx: rip relative
+#endif
 ia32_sysret:
 	movq %rax,RAX-ARGOFFSET(%rsp)
 ia32_ret_from_sys_call:
@@ -457,8 +497,8 @@ ia32_tracesys:
 	call syscall_trace_enter
 	LOAD_ARGS32 ARGOFFSET  /* reload args from stack in case ptrace changed it */
 	RESTORE_REST
-	cmpq $(IA32_NR_syscalls-1),%rax
-	ja  int_ret_from_sys_call	/* ia32_tracesys has set RAX(%rsp) */
+	cmpq $(IA32_NR_syscalls),%rax
+	jae int_ret_from_sys_call	/* ia32_tracesys has set RAX(%rsp) */
 	jmp ia32_do_call
 END(ia32_syscall)
 
@@ -508,7 +548,7 @@ ia32_ptregs_common:
 	CFI_REL_OFFSET	rsp,RSP-ARGOFFSET
 /*	CFI_REL_OFFSET	ss,SS-ARGOFFSET*/
 	SAVE_REST
-	call *%rax
+	CALL_NOSPEC %rax
 	RESTORE_REST
 	jmp  ia32_sysret	/* misbalances the return cache */
 	CFI_ENDPROC

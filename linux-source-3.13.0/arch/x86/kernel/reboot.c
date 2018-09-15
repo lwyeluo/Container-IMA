@@ -23,11 +23,14 @@
 #include <asm/cpu.h>
 #include <asm/nmi.h>
 #include <asm/smp.h>
+#include <asm/hw_irq.h>
 
 #include <linux/ctype.h>
 #include <linux/mc146818rtc.h>
 #include <asm/realmode.h>
 #include <asm/x86_init.h>
+#include <asm/efi.h>
+#include <asm/nospec-branch.h>
 
 /*
  * Power off function, if any
@@ -91,15 +94,19 @@ void __noreturn machine_real_restart(unsigned int type)
 	load_cr3(initial_page_table);
 #else
 	write_cr3(real_mode_header->trampoline_pgd);
+
+	/* Exiting long mode will fail if CR4.PCIDE is set. */
+	if (static_cpu_has(X86_FEATURE_PCID))
+		cr4_clear_bits(X86_CR4_PCIDE);
 #endif
 
 	/* Jump to the identity-mapped low memory code */
 #ifdef CONFIG_X86_32
-	asm volatile("jmpl *%0" : :
+	asm volatile(ANNOTATE_RETPOLINE_SAFE "jmpl *%0" : :
 		     "rm" (real_mode_header->machine_real_restart_asm),
 		     "a" (type));
 #else
-	asm volatile("ljmpl *%0" : :
+	asm volatile(ANNOTATE_RETPOLINE_SAFE "ljmpl *%0" : :
 		     "m" (real_mode_header->machine_real_restart_asm),
 		     "D" (type));
 #endif
@@ -448,12 +455,25 @@ static struct dmi_system_id __initdata reboot_dmi_table[] = {
 
 static int __init reboot_init(void)
 {
+	int rv;
+
 	/*
 	 * Only do the DMI check if reboot_type hasn't been overridden
 	 * on the command line
 	 */
-	if (reboot_default)
-		dmi_check_system(reboot_dmi_table);
+	if (!reboot_default)
+		return 0;
+
+	/*
+	 * The DMI quirks table takes precedence. If no quirks entry
+	 * matches and the ACPI Hardware Reduced bit is set, force EFI
+	 * reboot.
+	 */
+	rv = dmi_check_system(reboot_dmi_table);
+
+	if (!rv && efi_reboot_required())
+		reboot_type = BOOT_EFI;
+
 	return 0;
 }
 core_initcall(reboot_init);
@@ -582,12 +602,8 @@ static void native_machine_emergency_restart(void)
 			break;
 
 		case BOOT_EFI:
-			if (efi_enabled(EFI_RUNTIME_SERVICES))
-				efi.reset_system(reboot_mode == REBOOT_WARM ?
-						 EFI_RESET_WARM :
-						 EFI_RESET_COLD,
-						 EFI_SUCCESS, 0, NULL);
-			reboot_type = BOOT_KBD;
+			efi_reboot(reboot_mode, NULL);
+			reboot_type = BOOT_BIOS;
 			break;
 
 		case BOOT_CF9:

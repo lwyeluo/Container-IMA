@@ -169,6 +169,26 @@ static void early_init_intel(struct cpuinfo_x86 *c)
 		pr_info("Disabling PGE capability bit\n");
 		setup_clear_cpu_cap(X86_FEATURE_PGE);
 	}
+
+	if (c->cpuid_level >= 0x00000001) {
+		u32 eax, ebx, ecx, edx;
+
+		cpuid(0x00000001, &eax, &ebx, &ecx, &edx);
+		/*
+		 * If HTT (EDX[28]) is set EBX[16:23] contain the number of
+		 * apicids which are reserved per package. Store the resulting
+		 * shift value for the package management code.
+		 */
+		if (edx & (1U << 28))
+			c->x86_coreid_bits = get_count_order((ebx >> 16) & 0xff);
+	}
+
+	/*
+	 * Get the number of SMT siblings early from the extended topology
+	 * leaf, if available. Otherwise try the legacy SMT detection.
+	 */
+	if (detect_extended_topology_early(c) < 0)
+		detect_ht_early(c);
 }
 
 #ifdef CONFIG_X86_32
@@ -504,6 +524,25 @@ static void init_intel(struct cpuinfo_x86 *c)
 			wrmsrl(MSR_IA32_ENERGY_PERF_BIAS, epb);
 		}
 	}
+
+	if (!c->cpu_index) {
+		if (boot_cpu_has(X86_FEATURE_SPEC_CTRL)) {
+			printk(KERN_INFO "FEATURE SPEC_CTRL Present\n");
+			set_ibrs_supported();
+			set_ibpb_supported();
+			if (ibrs_inuse)
+				sysctl_ibrs_enabled = 1;
+			if (ibpb_inuse)
+				sysctl_ibpb_enabled = 1;
+			set_cpu_cap(c, X86_FEATURE_MSR_SPEC_CTRL);
+		} else {
+			printk(KERN_INFO "FEATURE SPEC_CTRL Not Present\n");
+		}
+	}
+
+	if (cpu_has(c, X86_FEATURE_SPEC_CTRL_SSBD) ||
+	    cpu_has(c, X86_FEATURE_VIRT_SSBD))
+		set_cpu_cap(c, X86_FEATURE_SSBD);
 }
 
 #ifdef CONFIG_X86_32
@@ -640,35 +679,6 @@ static void intel_tlb_lookup(const unsigned char desc)
 	}
 }
 
-static void intel_tlb_flushall_shift_set(struct cpuinfo_x86 *c)
-{
-	switch ((c->x86 << 8) + c->x86_model) {
-	case 0x60f: /* original 65 nm celeron/pentium/core2/xeon, "Merom"/"Conroe" */
-	case 0x616: /* single-core 65 nm celeron/core2solo "Merom-L"/"Conroe-L" */
-	case 0x617: /* current 45 nm celeron/core2/xeon "Penryn"/"Wolfdale" */
-	case 0x61d: /* six-core 45 nm xeon "Dunnington" */
-		tlb_flushall_shift = -1;
-		break;
-	case 0x61a: /* 45 nm nehalem, "Bloomfield" */
-	case 0x61e: /* 45 nm nehalem, "Lynnfield" */
-	case 0x625: /* 32 nm nehalem, "Clarkdale" */
-	case 0x62c: /* 32 nm nehalem, "Gulftown" */
-	case 0x62e: /* 45 nm nehalem-ex, "Beckton" */
-	case 0x62f: /* 32 nm Xeon E7 */
-		tlb_flushall_shift = 6;
-		break;
-	case 0x62a: /* SandyBridge */
-	case 0x62d: /* SandyBridge, "Romely-EP" */
-		tlb_flushall_shift = 5;
-		break;
-	case 0x63a: /* Ivybridge */
-		tlb_flushall_shift = 2;
-		break;
-	default:
-		tlb_flushall_shift = 6;
-	}
-}
-
 static void intel_detect_tlb(struct cpuinfo_x86 *c)
 {
 	int i, j, n;
@@ -693,7 +703,6 @@ static void intel_detect_tlb(struct cpuinfo_x86 *c)
 		for (j = 1 ; j < 16 ; j++)
 			intel_tlb_lookup(desc[j]);
 	}
-	intel_tlb_flushall_shift_set(c);
 }
 
 static const struct cpu_dev intel_cpu_dev = {

@@ -156,12 +156,12 @@ static struct sk_buff **udp_gro_receive(struct sk_buff **head, struct sk_buff *s
 	unsigned int hlen, off;
 	int flush = 1;
 
-	if (NAPI_GRO_CB(skb)->udp_mark ||
+	if (NAPI_GRO_CB(skb)->encap_mark ||
 	    (!skb->encapsulation && skb->ip_summed != CHECKSUM_COMPLETE))
 		goto out;
 
-	/* mark that this skb passed once through the udp gro layer */
-	NAPI_GRO_CB(skb)->udp_mark = 1;
+	/* mark that this skb passed once through the tunnel gro layer */
+	NAPI_GRO_CB(skb)->encap_mark = 1;
 
 	off  = skb_gro_offset(skb);
 	hlen = off + sizeof(*uh);
@@ -196,7 +196,13 @@ unflush:
 	}
 
 	skb_gro_pull(skb, sizeof(struct udphdr)); /* pull encapsulating udp header */
-	pp = uo_priv->offload->callbacks.gro_receive(head, skb);
+
+	if (gro_recursion_inc_test(skb)) {
+		flush = 1;
+		pp = NULL;
+	} else {
+		pp = uo_priv->offload->callbacks.gro_receive(head, skb);
+	}
 
 out_unlock:
 	rcu_read_unlock();

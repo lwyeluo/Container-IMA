@@ -16,6 +16,7 @@
 #include <linux/context_tracking.h>	/* exception_enter(), ...	*/
 
 #include <asm/traps.h>			/* dotraplinkage, ...		*/
+#include <asm/sections.h>
 #include <asm/pgalloc.h>		/* pgd_*(), ...			*/
 #include <asm/kmemcheck.h>		/* kmemcheck_*(), ...		*/
 #include <asm/fixmap.h>			/* VSYSCALL_START		*/
@@ -640,7 +641,7 @@ no_context(struct pt_regs *regs, unsigned long error_code,
 	int sig;
 
 	/* Are we prepared to handle this kernel fault? */
-	if (fixup_exception(regs)) {
+	if (fixup_exception(regs, X86_TRAP_PF)) {
 		/*
 		 * Any interrupt that takes a fault gets the fixup. This makes
 		 * the below recursive fault logic only apply to a faults from

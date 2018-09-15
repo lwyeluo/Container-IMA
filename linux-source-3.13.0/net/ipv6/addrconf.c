@@ -836,6 +836,8 @@ ipv6_add_addr(struct inet6_dev *idev, const struct in6_addr *addr,
 		goto out;
 	}
 
+	neigh_parms_data_state_setall(idev->nd_parms);
+
 	ifa->addr = *addr;
 	if (peer_addr)
 		ifa->peer_addr = *peer_addr;
@@ -1073,7 +1075,7 @@ retry:
 
 	regen_advance = idev->cnf.regen_max_retry *
 	                idev->cnf.dad_transmits *
-	                idev->nd_parms->retrans_time / HZ;
+	                NEIGH_VAR(idev->nd_parms, RETRANS_TIME) / HZ;
 	write_unlock(&idev->lock);
 
 	/* A temporary address is created only if this calculated Preferred
@@ -1893,7 +1895,8 @@ static void ipv6_regen_rndid(unsigned long data)
 
 	expires = jiffies +
 		idev->cnf.temp_prefered_lft * HZ -
-		idev->cnf.regen_max_retry * idev->cnf.dad_transmits * idev->nd_parms->retrans_time -
+		idev->cnf.regen_max_retry * idev->cnf.dad_transmits *
+		NEIGH_VAR(idev->nd_parms, RETRANS_TIME) -
 		idev->cnf.max_desync_factor * HZ;
 	if (time_before(expires, jiffies)) {
 		pr_warn("%s: too short regeneration interval; timer disabled for %s\n",
@@ -2616,8 +2619,18 @@ static void init_loopback(struct net_device *dev)
 			if (sp_ifa->flags & (IFA_F_DADFAILED | IFA_F_TENTATIVE))
 				continue;
 
-			if (sp_ifa->rt)
-				continue;
+			if (sp_ifa->rt) {
+				/* This dst has been added to garbage list when
+				 * lo device down, release this obsolete dst and
+				 * reallocate a new router for ifa.
+				 */
+				if (!atomic_read(&sp_ifa->rt->rt6i_ref)) {
+					ip6_rt_put(sp_ifa->rt);
+					sp_ifa->rt = NULL;
+				} else {
+					continue;
+				}
+			}
 
 			sp_rt = addrconf_dst_alloc(idev, &sp_ifa->addr, false);
 
@@ -3185,7 +3198,8 @@ static void addrconf_dad_timer(unsigned long data)
 	}
 
 	ifp->dad_probes--;
-	addrconf_mod_dad_timer(ifp, ifp->idev->nd_parms->retrans_time);
+	addrconf_mod_dad_timer(ifp,
+			       NEIGH_VAR(ifp->idev->nd_parms, RETRANS_TIME));
 	spin_unlock(&ifp->lock);
 	write_unlock(&idev->lock);
 
@@ -3525,7 +3539,7 @@ restart:
 				   !(ifp->flags&IFA_F_TENTATIVE)) {
 				unsigned long regen_advance = ifp->idev->cnf.regen_max_retry *
 					ifp->idev->cnf.dad_transmits *
-					ifp->idev->nd_parms->retrans_time / HZ;
+					NEIGH_VAR(ifp->idev->nd_parms, RETRANS_TIME) / HZ;
 
 				if (age >= ifp->prefered_lft - regen_advance) {
 					struct inet6_ifaddr *ifpub = ifp->ifpub;
@@ -4226,7 +4240,7 @@ static int inet6_fill_ifla6_attrs(struct sk_buff *skb, struct inet6_dev *idev)
 	ci.max_reasm_len = IPV6_MAXPLEN;
 	ci.tstamp = cstamp_delta(idev->tstamp);
 	ci.reachable_time = jiffies_to_msecs(idev->nd_parms->reachable_time);
-	ci.retrans_time = jiffies_to_msecs(idev->nd_parms->retrans_time);
+	ci.retrans_time = jiffies_to_msecs(NEIGH_VAR(idev->nd_parms, RETRANS_TIME));
 	if (nla_put(skb, IFLA_INET6_CACHEINFO, sizeof(ci), &ci))
 		goto nla_put_failure;
 	nla = nla_reserve(skb, IFLA_INET6_CONF, DEVCONF_MAX * sizeof(s32));
@@ -4561,24 +4575,20 @@ static void __ipv6_ifa_notify(int event, struct inet6_ifaddr *ifp)
 		addrconf_leave_solict(ifp->idev, &ifp->addr);
 		if (!ipv6_addr_any(&ifp->peer_addr)) {
 			struct rt6_info *rt;
-			struct net_device *dev = ifp->idev->dev;
 
-			rt = rt6_lookup(dev_net(dev), &ifp->peer_addr, NULL,
-					dev->ifindex, 1);
-			if (rt) {
-				dst_hold(&rt->dst);
-				if (ip6_del_rt(rt))
-					dst_free(&rt->dst);
-			}
+			rt = addrconf_get_prefix_route(&ifp->peer_addr, 128,
+						       ifp->idev->dev, 0, 0);
+			if (rt)
+				ip6_del_rt(rt);
 		}
 		dst_hold(&ifp->rt->dst);
 
-		if (ip6_del_rt(ifp->rt))
-			dst_free(&ifp->rt->dst);
+		ip6_del_rt(ifp->rt);
+
+		rt_genid_bump_ipv6(net);
 		break;
 	}
 	atomic_inc(&net->ipv6.dev_addr_genid);
-	rt_genid_bump_ipv6(net);
 }
 
 static void ipv6_ifa_notify(int event, struct inet6_ifaddr *ifp)
@@ -4717,85 +4727,6 @@ int addrconf_sysctl_disable(struct ctl_table *ctl, int write,
 	return ret;
 }
 
-static void dev_tempaddr_change(struct inet6_dev *idev)
-{
-	struct netdev_notifier_info info;
-
-	if (!idev || !idev->dev)
-		return;
-
-	netdev_notifier_info_init(&info, idev->dev);
-	if (!idev->cnf.disable_ipv6) {
-		/* If ipv6 is enabled, try to bring down and back up the
-		 * interface to get new temporary addresses created
-		 */
-		addrconf_notify(NULL, NETDEV_DOWN, &info);
-		addrconf_notify(NULL, NETDEV_UP, &info);
-	}
-}
-
-static void addrconf_tempaddr_change(struct net *net, __s32 newf)
-{
-	struct net_device *dev;
-	struct inet6_dev *idev;
-
-	rcu_read_lock();
-	for_each_netdev_rcu(net, dev) {
-		idev = __in6_dev_get(dev);
-		if (idev) {
-			int changed = (!idev->cnf.use_tempaddr) ^ (!newf);
-			idev->cnf.use_tempaddr = newf;
-			if (changed)
-				dev_tempaddr_change(idev);
-		}
-	}
-	rcu_read_unlock();
-}
-
-static int addrconf_use_tempaddr(struct ctl_table *table, int *p, int old)
-{
-	struct net *net;
-
-	net = (struct net *)table->extra2;
-
-	if (p == &net->ipv6.devconf_dflt->use_tempaddr)
-		return 0;
-
-	if (!rtnl_trylock()) {
-		/* Restore the original values before restarting */
-		*p = old;
-		return restart_syscall();
-	}
-
-	if (p == &net->ipv6.devconf_all->use_tempaddr) {
-		__s32 newf = net->ipv6.devconf_all->use_tempaddr;
-		net->ipv6.devconf_dflt->use_tempaddr = newf;
-		addrconf_tempaddr_change(net, newf);
-	} else if ((!*p) ^ (!old))
-		dev_tempaddr_change((struct inet6_dev *)table->extra1);
-
-	rtnl_unlock();
-	return 0;
-}
-
-static
-int addrconf_sysctl_tempaddr(ctl_table *ctl, int write,
-			     void __user *buffer, size_t *lenp, loff_t *ppos)
-{
-	int *valp = ctl->data;
-	int val = *valp;
-	loff_t pos = *ppos;
-	int ret;
-
-	ret = proc_dointvec(ctl, write, buffer, lenp, ppos);
-
-	if (write)
-		ret = addrconf_use_tempaddr(ctl, valp, val);
-	if (ret)
-		*ppos = pos;
-	return ret;
-}
-
 static struct addrconf_sysctl_table
 {
 	struct ctl_table_header *sysctl_header;
@@ -4901,7 +4832,7 @@ static struct addrconf_sysctl_table
 			.data		= &ipv6_devconf.use_tempaddr,
 			.maxlen		= sizeof(int),
 			.mode		= 0644,
-			.proc_handler	= addrconf_sysctl_tempaddr,
+			.proc_handler	= proc_dointvec,
 		},
 		{
 			.procname	= "temp_valid_lft",
@@ -5105,7 +5036,7 @@ static void __addrconf_sysctl_unregister(struct ipv6_devconf *p)
 
 static void addrconf_sysctl_register(struct inet6_dev *idev)
 {
-	neigh_sysctl_register(idev->dev, idev->nd_parms, "ipv6",
+	neigh_sysctl_register(idev->dev, idev->nd_parms,
 			      &ndisc_ifinfo_sysctl_change);
 	__addrconf_sysctl_register(dev_net(idev->dev), idev->dev->name,
 					idev, &idev->cnf);

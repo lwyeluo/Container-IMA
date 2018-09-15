@@ -8,7 +8,6 @@
 #include <linux/threads.h>
 #include <linux/nsproxy.h>
 #include <linux/kref.h>
-#include <linux/crypto.h>
 
 struct pidmap {
        atomic_t nr_free;

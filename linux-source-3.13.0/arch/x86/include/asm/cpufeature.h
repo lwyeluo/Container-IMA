@@ -8,7 +8,7 @@
 #include <asm/required-features.h>
 #endif
 
-#define NCAPINTS	10	/* N 32-bit words worth of info */
+#define NCAPINTS	19	/* N 32-bit words worth of info */
 #define NBUGINTS	1	/* N 32-bit bug flags */
 
 /*
@@ -186,6 +186,18 @@
 #define X86_FEATURE_DTHERM	(7*32+ 7) /* Digital Thermal Sensor */
 #define X86_FEATURE_HW_PSTATE	(7*32+ 8) /* AMD HW-PState */
 #define X86_FEATURE_PROC_FEEDBACK (7*32+ 9) /* AMD ProcFeedbackInterface */
+#define X86_FEATURE_INVPCID_SINGLE (7*32+10) /* Effectively INVPCID && CR4.PCIDE=1 */
+#define X86_FEATURE_SSBD	( 7*32+22) /* Speculative Store Bypass Disable */
+#define X86_FEATURE_SPEC_STORE_BYPASS_DISABLE ( 7*32+23 ) /* Disable Speculative Store Bypass. */
+#define X86_FEATURE_LS_CFG_SSBD	( 7*32+24) /* AMD SSBD implementation via LS_CFG MSR */
+#define X86_FEATURE_IBPB	( 7*32+25) /* Indirect Branch Prediction Barrier */
+#define X86_FEATURE_MSR_SPEC_CTRL ( 7*32+26) /* "" MSR SPEC_CTRL is implemented */
+#define X86_FEATURE_L1TF_PTEINV	( 7*32+27) /* "" L1TF workaround PTE inversion */
+#define X86_FEATURE_ZEN		( 7*32+28) /* "" CPU is AMD family 0x17 (Zen) */
+#define X86_FEATURE_RETPOLINE	( 7*32+29) /* Generic Retpoline mitigation for Spectre variant 2 */
+#define X86_FEATURE_RETPOLINE_AMD ( 7*32+30) /* AMD Retpoline mitigation for Spectre variant 2 */
+/* Because the ALTERNATIVE scheme is for members of the X86_FEATURE club... */
+#define X86_FEATURE_KAISER	(7*32+31) /* "" CONFIG_PAGE_TABLE_ISOLATION w/o nokaiser */
 
 /* Virtualization flags: Linux defined, word 8 */
 #define X86_FEATURE_TPR_SHADOW  (8*32+ 0) /* Intel TPR Shadow */
@@ -204,7 +216,6 @@
 #define X86_FEATURE_PAUSEFILTER (8*32+13) /* AMD filtered pause intercept */
 #define X86_FEATURE_PFTHRESHOLD (8*32+14) /* AMD pause filter threshold */
 #define X86_FEATURE_VMMCALL     ( 8*32+15) /* Prefer vmmcall to vmcall */
-
 
 /* Intel-defined CPU features, CPUID level 0x00000007:0 (ebx), word 9 */
 #define X86_FEATURE_FSGSBASE	(9*32+ 0) /* {RD/WR}{FS/GS}BASE instructions*/
@@ -225,6 +236,18 @@
 #define X86_FEATURE_AVX512ER	(9*32+27) /* AVX-512 Exponential and Reciprocal */
 #define X86_FEATURE_AVX512CD	(9*32+28) /* AVX-512 Conflict Detection */
 
+/* AMD-defined CPU features, CPUID level 0x80000008 (ebx), word 13 */
+#define X86_FEATURE_CLZERO	(13*32+ 0) /* CLZERO instruction */
+#define X86_FEATURE_AMD_IBPB	(13*32+12) /* Indirect Branch Prediction Barrier */
+#define X86_FEATURE_VIRT_SSBD	(13*32+25) /* Virtualized Speculative Store Bypass Disable */
+
+/* Intel-defined CPU features, CPUID level 0x00000007:0 (EDX), word 18 */
+#define X86_FEATURE_SPEC_CTRL		(18*32+26) /* "" Speculation Control (IBRS + IBPB) */
+#define X86_FEATURE_INTEL_STIBP		(18*32+27) /* "" Single Thread Indirect Branch Predictors */
+#define X86_FEATURE_FLUSH_L1D		(18*32+28) /* Flush L1D cache */
+#define X86_FEATURE_ARCH_CAPABILITIES	(18*32+29) /* IA32_ARCH_CAPABILITIES MSR (Intel) */
+#define X86_FEATURE_SPEC_CTRL_SSBD	(18*32+31) /* "" Speculative Store Bypass Disable */
+
 /*
  * BUG word(s)
  */
@@ -235,6 +258,11 @@
 #define X86_BUG_COMA		X86_BUG(2) /* Cyrix 6x86 coma */
 #define X86_BUG_AMD_TLB_MMATCH	X86_BUG(3) /* AMD Erratum 383 */
 #define X86_BUG_AMD_APIC_C1E	X86_BUG(4) /* AMD Erratum 400 */
+#define X86_BUG_CPU_MELTDOWN	X86_BUG(14) /* CPU is affected by meltdown attack and needs kernel page table isolation */
+#define X86_BUG_SPECTRE_V1	X86_BUG(15) /* CPU is affected by Spectre variant 1 attack with conditional branches */
+#define X86_BUG_SPECTRE_V2	X86_BUG(16) /* CPU is affected by Spectre variant 2 attack with indirect branches */
+#define X86_BUG_SPEC_STORE_BYPASS X86_BUG(17) /* CPU is affected by speculative store bypass attack */
+#define X86_BUG_L1TF		X86_BUG(18) /* CPU is affected by L1 Terminal Fault */
 
 #if defined(__KERNEL__) && !defined(__ASSEMBLY__)
 
@@ -248,16 +276,25 @@ extern const char * const x86_power_flags[32];
 	 test_bit(bit, (unsigned long *)((c)->x86_capability))
 
 #define REQUIRED_MASK_BIT_SET(bit)					\
-	 ( (((bit)>>5)==0 && (1UL<<((bit)&31) & REQUIRED_MASK0)) ||	\
-	   (((bit)>>5)==1 && (1UL<<((bit)&31) & REQUIRED_MASK1)) ||	\
-	   (((bit)>>5)==2 && (1UL<<((bit)&31) & REQUIRED_MASK2)) ||	\
-	   (((bit)>>5)==3 && (1UL<<((bit)&31) & REQUIRED_MASK3)) ||	\
-	   (((bit)>>5)==4 && (1UL<<((bit)&31) & REQUIRED_MASK4)) ||	\
-	   (((bit)>>5)==5 && (1UL<<((bit)&31) & REQUIRED_MASK5)) ||	\
-	   (((bit)>>5)==6 && (1UL<<((bit)&31) & REQUIRED_MASK6)) ||	\
-	   (((bit)>>5)==7 && (1UL<<((bit)&31) & REQUIRED_MASK7)) ||	\
-	   (((bit)>>5)==8 && (1UL<<((bit)&31) & REQUIRED_MASK8)) ||	\
-	   (((bit)>>5)==9 && (1UL<<((bit)&31) & REQUIRED_MASK9)) )
+	 ( (((bit)>>5)==0  && (1UL<<((bit)&31) & REQUIRED_MASK0 )) ||	\
+	   (((bit)>>5)==1  && (1UL<<((bit)&31) & REQUIRED_MASK1 )) ||	\
+	   (((bit)>>5)==2  && (1UL<<((bit)&31) & REQUIRED_MASK2 )) ||	\
+	   (((bit)>>5)==3  && (1UL<<((bit)&31) & REQUIRED_MASK3 )) ||	\
+	   (((bit)>>5)==4  && (1UL<<((bit)&31) & REQUIRED_MASK4 )) ||	\
+	   (((bit)>>5)==5  && (1UL<<((bit)&31) & REQUIRED_MASK5 )) ||	\
+	   (((bit)>>5)==6  && (1UL<<((bit)&31) & REQUIRED_MASK6 )) ||	\
+	   (((bit)>>5)==7  && (1UL<<((bit)&31) & REQUIRED_MASK7 )) ||	\
+	   (((bit)>>5)==8  && (1UL<<((bit)&31) & REQUIRED_MASK8 )) ||	\
+	   (((bit)>>5)==9  && (1UL<<((bit)&31) & REQUIRED_MASK9 )) ||	\
+	   (((bit)>>5)==10 && (1UL<<((bit)&31) & REQUIRED_MASK10)) ||	\
+	   (((bit)>>5)==11 && (1UL<<((bit)&31) & REQUIRED_MASK11)) ||	\
+	   (((bit)>>5)==12 && (1UL<<((bit)&31) & REQUIRED_MASK12)) ||	\
+	   (((bit)>>5)==13 && (1UL<<((bit)&31) & REQUIRED_MASK13)) ||	\
+	   (((bit)>>5)==14 && (1UL<<((bit)&31) & REQUIRED_MASK14)) ||	\
+	   (((bit)>>5)==15 && (1UL<<((bit)&31) & REQUIRED_MASK15)) ||	\
+	   (((bit)>>5)==16 && (1UL<<((bit)&31) & REQUIRED_MASK16)) ||	\
+	   (((bit)>>5)==17 && (1UL<<((bit)&31) & REQUIRED_MASK17)) ||	\
+	   (((bit)>>5)==18 && (1UL<<((bit)&31) & REQUIRED_MASK18)) )
 
 #define cpu_has(c, bit)							\
 	(__builtin_constant_p(bit) && REQUIRED_MASK_BIT_SET(bit) ? 1 :	\
@@ -279,6 +316,8 @@ extern const char * const x86_power_flags[32];
 	set_cpu_cap(&boot_cpu_data, bit);	\
 	set_bit(bit, (unsigned long *)cpu_caps_set);	\
 } while (0)
+
+#define setup_force_cpu_bug(bit) setup_force_cpu_cap(bit)
 
 #define cpu_has_fpu		boot_cpu_has(X86_FEATURE_FPU)
 #define cpu_has_vme		boot_cpu_has(X86_FEATURE_VME)
@@ -387,6 +426,7 @@ static __always_inline __pure bool __static_cpu_has(u16 bit)
 			 " .word %P0\n"		/* 1: do replace */
 			 " .byte 2b - 1b\n"	/* source len */
 			 " .byte 0\n"		/* replacement len */
+			 " .byte 0\n"		/* pad len */
 			 ".previous\n"
 			 /* skipping size check since replacement size = 0 */
 			 : : "i" (X86_FEATURE_ALWAYS) : : t_warn);
@@ -401,6 +441,7 @@ static __always_inline __pure bool __static_cpu_has(u16 bit)
 			 " .word %P0\n"		/* feature bit */
 			 " .byte 2b - 1b\n"	/* source len */
 			 " .byte 0\n"		/* replacement len */
+			 " .byte 0\n"		/* pad len */
 			 ".previous\n"
 			 /* skipping size check since replacement size = 0 */
 			 : : "i" (bit) : : t_no);
@@ -426,6 +467,7 @@ static __always_inline __pure bool __static_cpu_has(u16 bit)
 			     " .word %P1\n"		/* feature bit */
 			     " .byte 2b - 1b\n"		/* source len */
 			     " .byte 4f - 3f\n"		/* replacement len */
+			     " .byte 0\n"		/* pad len */
 			     ".previous\n"
 			     ".section .discard,\"aw\",@progbits\n"
 			     " .byte 0xff + (4f-3f) - (2b-1b)\n" /* size check */
@@ -452,31 +494,30 @@ static __always_inline __pure bool __static_cpu_has(u16 bit)
 static __always_inline __pure bool _static_cpu_has_safe(u16 bit)
 {
 #ifdef CC_HAVE_ASM_GOTO
-/*
- * We need to spell the jumps to the compiler because, depending on the offset,
- * the replacement jump can be bigger than the original jump, and this we cannot
- * have. Thus, we force the jump to the widest, 4-byte, signed relative
- * offset even though the last would often fit in less bytes.
- */
-		asm_volatile_goto("1: .byte 0xe9\n .long %l[t_dynamic] - 2f\n"
+		asm_volatile_goto("1: jmp %l[t_dynamic]\n"
 			 "2:\n"
+			 ".skip -(((5f-4f) - (2b-1b)) > 0) * "
+			         "((5f-4f) - (2b-1b)),0x90\n"
+			 "3:\n"
 			 ".section .altinstructions,\"a\"\n"
 			 " .long 1b - .\n"		/* src offset */
-			 " .long 3f - .\n"		/* repl offset */
+			 " .long 4f - .\n"		/* repl offset */
 			 " .word %P1\n"			/* always replace */
-			 " .byte 2b - 1b\n"		/* src len */
-			 " .byte 4f - 3f\n"		/* repl len */
+			 " .byte 3b - 1b\n"		/* src len */
+			 " .byte 5f - 4f\n"		/* repl len */
+			 " .byte 3b - 2b\n"		/* pad len */
 			 ".previous\n"
 			 ".section .altinstr_replacement,\"ax\"\n"
-			 "3: .byte 0xe9\n .long %l[t_no] - 2b\n"
-			 "4:\n"
+			 "4: jmp %l[t_no]\n"
+			 "5:\n"
 			 ".previous\n"
 			 ".section .altinstructions,\"a\"\n"
 			 " .long 1b - .\n"		/* src offset */
 			 " .long 0\n"			/* no replacement */
 			 " .word %P0\n"			/* feature bit */
-			 " .byte 2b - 1b\n"		/* src len */
+			 " .byte 3b - 1b\n"		/* src len */
 			 " .byte 0\n"			/* repl len */
+			 " .byte 0\n"			/* pad len */
 			 ".previous\n"
 			 : : "i" (bit), "i" (X86_FEATURE_ALWAYS)
 			 : : t_dynamic, t_no);
@@ -496,6 +537,7 @@ static __always_inline __pure bool _static_cpu_has_safe(u16 bit)
 			     " .word %P2\n"		/* always replace */
 			     " .byte 2b - 1b\n"		/* source len */
 			     " .byte 4f - 3f\n"		/* replacement len */
+			     " .byte 0\n"		/* pad len */
 			     ".previous\n"
 			     ".section .discard,\"aw\",@progbits\n"
 			     " .byte 0xff + (4f-3f) - (2b-1b)\n" /* size check */
@@ -510,6 +552,7 @@ static __always_inline __pure bool _static_cpu_has_safe(u16 bit)
 			     " .word %P1\n"		/* feature bit */
 			     " .byte 4b - 3b\n"		/* src len */
 			     " .byte 6f - 5f\n"		/* repl len */
+			     " .byte 0\n"		/* pad len */
 			     ".previous\n"
 			     ".section .discard,\"aw\",@progbits\n"
 			     " .byte 0xff + (6f-5f) - (4b-3b)\n" /* size check */

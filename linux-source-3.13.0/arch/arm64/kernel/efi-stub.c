@@ -12,8 +12,6 @@
 #include <linux/efi.h>
 #include <linux/libfdt.h>
 #include <asm/sections.h>
-#include <generated/compile.h>
-#include <generated/utsrelease.h>
 
 /*
  * AArch64 requires the DTB to be 8-byte aligned in the first 512MiB from
@@ -24,12 +22,6 @@
 #define MAX_FDT_OFFSET	SZ_512M
 
 #define efi_call_early(f, ...) sys_table_arg->boottime->f(__VA_ARGS__)
-
-#define efi_call_phys1(f, arg1)				f(arg1)
-#define efi_call_phys2(f, arg1, arg2)			f(arg1, arg2)
-#define efi_call_phys3(f, arg1, arg2, arg3) 		f(arg1, arg2, arg3)
-#define efi_call_phys4(f, arg1, arg2, arg3, arg4)	f(arg1, arg2, arg3, arg4)
-#define efi_call_phys5(f, arg1, arg2, arg3, arg4, arg5)	f(arg1, arg2, arg3, arg4, arg5)
 
 static void efi_char16_printk(efi_system_table_t *sys_table_arg,
 			      efi_char16_t *str);

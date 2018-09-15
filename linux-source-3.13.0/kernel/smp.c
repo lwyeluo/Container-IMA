@@ -467,6 +467,30 @@ EXPORT_SYMBOL(smp_call_function);
 unsigned int setup_max_cpus = NR_CPUS;
 EXPORT_SYMBOL(setup_max_cpus);
 
+#ifdef CONFIG_X86
+/*
+ * use IBRS
+ * bit 0 = indicate if ibrs is currently in use
+ * bit 1 = indicate if system supports ibrs
+ * bit 2 = indicate if admin disables ibrs
+*/
+
+int use_ibrs;
+EXPORT_SYMBOL(use_ibrs);
+
+/*
+ * use IBRS
+ * bit 0 = indicate if ibpb is currently in use
+ * bit 1 = indicate if system supports ibpb
+ * bit 2 = indicate if admin disables ibpb
+*/
+int use_ibpb;
+EXPORT_SYMBOL(use_ibpb);
+#endif
+
+/* mutex to serialize IBRS & IBPB control changes */
+DEFINE_MUTEX(spec_ctrl_mutex);
+EXPORT_SYMBOL(spec_ctrl_mutex);
 
 /*
  * Setup routine for controlling SMP activation
@@ -490,6 +514,27 @@ static int __init nosmp(char *str)
 }
 
 early_param("nosmp", nosmp);
+
+#ifdef CONFIG_X86
+static int __init noibrs(char *str)
+{
+	set_ibrs_disabled();
+
+	return 0;
+}
+
+early_param("noibrs", noibrs);
+
+static int __init noibpb(char *str)
+{
+	set_ibpb_disabled();
+
+	return 0;
+}
+
+early_param("noibpb", noibpb);
+#endif
+
 
 /* this is hard limit */
 static int __init nrcpus(char *str)
@@ -546,6 +591,26 @@ void __init smp_init(void)
 			cpu_up(cpu);
 	}
 
+#ifdef CONFIG_HOTPLUG_SMT
+	/* Handle nosmt[=force] here */
+	if (cpu_smt_control == CPU_SMT_DISABLED ||
+	    cpu_smt_control == CPU_SMT_FORCE_DISABLED) {
+		int ret;
+
+		cpu_maps_update_begin();
+		for_each_online_cpu(cpu) {
+			if (topology_is_primary_thread(cpu))
+				continue;
+			ret = cpu_down_maps_locked(cpu);
+			if (ret)
+				break;
+		}
+		cpu_maps_update_done();
+	}
+#endif
+
+	/* Final decision about SMT support */
+	cpu_smt_check_topology();
 	/* Any cleanup work */
 	smp_announce();
 	smp_cpus_done(setup_max_cpus);

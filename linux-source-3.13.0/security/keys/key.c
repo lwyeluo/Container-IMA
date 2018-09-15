@@ -298,6 +298,8 @@ struct key *key_alloc(struct key_type *type, const char *desc,
 		key->flags |= 1 << KEY_FLAG_IN_QUOTA;
 	if (flags & KEY_ALLOC_TRUSTED)
 		key->flags |= 1 << KEY_FLAG_TRUSTED;
+	if (flags & KEY_ALLOC_UID_KEYRING)
+		key->flags |= 1 << KEY_FLAG_UID_KEYRING;
 
 #ifdef KEY_DEBUGGING
 	key->magic = KEY_DEBUG_MAGIC;
@@ -575,7 +577,7 @@ int key_reject_and_link(struct key *key,
 
 	mutex_unlock(&key_construction_mutex);
 
-	if (keyring)
+	if (keyring && link_ret == 0)
 		__key_link_end(keyring, &key->index_key, edit);
 
 	/* wake up anyone waiting for a key to be constructed */

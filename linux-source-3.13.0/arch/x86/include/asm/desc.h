@@ -43,7 +43,7 @@ struct gdt_page {
 	struct desc_struct gdt[GDT_ENTRIES];
 } __attribute__((aligned(PAGE_SIZE)));
 
-DECLARE_PER_CPU_PAGE_ALIGNED(struct gdt_page, gdt_page);
+DECLARE_PER_CPU_PAGE_ALIGNED_USER_MAPPED(struct gdt_page, gdt_page);
 
 static inline struct desc_struct *get_cpu_gdt_table(unsigned int cpu)
 {
@@ -278,21 +278,6 @@ static inline bool LDT_zero(const struct user_desc *info)
 static inline void clear_LDT(void)
 {
 	set_ldt(NULL, 0);
-}
-
-/*
- * load one particular LDT into the current CPU
- */
-static inline void load_LDT_nolock(mm_context_t *pc)
-{
-	set_ldt(pc->ldt, pc->size);
-}
-
-static inline void load_LDT(mm_context_t *pc)
-{
-	preempt_disable();
-	load_LDT_nolock(pc);
-	preempt_enable();
 }
 
 static inline unsigned long get_desc_base(const struct desc_struct *desc)

@@ -53,6 +53,7 @@
 #include <linux/stackprotector.h>
 #include <linux/gfp.h>
 #include <linux/cpuidle.h>
+#include <linux/irq.h>
 
 #include <asm/acpi.h>
 #include <asm/desc.h>
@@ -77,6 +78,9 @@
 #include <asm/i8259.h>
 #include <asm/realmode.h>
 #include <asm/misc.h>
+#include <asm/spec-ctrl.h>
+#include <asm/microcode.h>
+#include <asm/spec-ctrl.h>
 
 /* State of each CPU */
 DEFINE_PER_CPU(int, cpu_state) = { 0 };
@@ -103,6 +107,17 @@ DEFINE_PER_CPU_SHARED_ALIGNED(struct cpuinfo_x86, cpu_info);
 EXPORT_PER_CPU_SYMBOL(cpu_info);
 
 atomic_t init_deasserted;
+
+/* Logical package management. We might want to allocate that dynamically */
+static int *physical_to_logical_pkg __read_mostly;
+static unsigned long *physical_package_map __read_mostly;;
+static unsigned long *logical_package_map  __read_mostly;
+static unsigned int max_physical_pkg_id __read_mostly;
+unsigned int __max_logical_packages __read_mostly;
+EXPORT_SYMBOL(__max_logical_packages);
+
+/* Maximum number of SMT threads on any online core */
+int __max_smt_threads __read_mostly;
 
 /*
  * Report back to the Boot Processor during boot time or to the caller processor
@@ -242,6 +257,8 @@ static void notrace start_secondary(void *unused)
 	 */
 	check_tsc_sync_target();
 
+	speculative_store_bypass_ht_init();
+
 	/*
 	 * Enable the espfix hack for this CPU
 	 */
@@ -272,6 +289,132 @@ static void notrace start_secondary(void *unused)
 	cpu_startup_entry(CPUHP_ONLINE);
 }
 
+int topology_update_package_map(unsigned int apicid, unsigned int cpu)
+{
+	unsigned int new, pkg = apicid >> boot_cpu_data.x86_coreid_bits;
+
+	/* Called from early boot ? */
+	if (!physical_package_map)
+		return 0;
+
+	if (pkg >= max_physical_pkg_id)
+		return -EINVAL;
+
+	/* Set the logical package id */
+	if (test_and_set_bit(pkg, physical_package_map))
+		goto found;
+
+	new = find_first_zero_bit(logical_package_map, __max_logical_packages);
+	if (new >= __max_logical_packages) {
+		physical_to_logical_pkg[pkg] = -1;
+		pr_warn("APIC(%x) Package %u exceeds logical package map\n",
+			apicid, pkg);
+		return -ENOSPC;
+	}
+	set_bit(new, logical_package_map);
+	pr_info("APIC(%x) Converting physical %u to logical package %u\n",
+		apicid, pkg, new);
+	physical_to_logical_pkg[pkg] = new;
+
+found:
+	cpu_data(cpu).logical_proc_id = physical_to_logical_pkg[pkg];
+	return 0;
+}
+
+/**
+ * topology_is_primary_thread - Check whether CPU is the primary SMT thread
+ * @cpu:	CPU to check
+ */
+bool topology_is_primary_thread(unsigned int cpu)
+{
+	return apic_id_is_primary_thread(per_cpu(x86_cpu_to_apicid, cpu));
+}
+
+/**
+ * topology_smt_supported - Check whether SMT is supported by the CPUs
+ */
+bool topology_smt_supported(void)
+{
+	return smp_num_siblings > 1;
+}
+
+/**
+ * topology_phys_to_logical_pkg - Map a physical package id to a logical
+ *
+ * Returns logical package id or -1 if not found
+ */
+int topology_phys_to_logical_pkg(unsigned int phys_pkg)
+{
+	if (phys_pkg >= max_physical_pkg_id)
+		return -1;
+	return physical_to_logical_pkg[phys_pkg];
+}
+EXPORT_SYMBOL(topology_phys_to_logical_pkg);
+
+static void __init smp_init_package_map(void)
+{
+	unsigned int ncpus, cpu;
+	size_t size;
+
+	/*
+	 * Today neither Intel nor AMD support heterogenous systems. That
+	 * might change in the future....
+	 *
+	 * While ideally we'd want '* smp_num_siblings' in the below @ncpus
+	 * computation, this won't actually work since some Intel BIOSes
+	 * report inconsistent HT data when they disable HT.
+	 *
+	 * In particular, they reduce the APIC-IDs to only include the cores,
+	 * but leave the CPUID topology to say there are (2) siblings.
+	 * This means we don't know how many threads there will be until
+	 * after the APIC enumeration.
+	 *
+	 * By not including this we'll sometimes over-estimate the number of
+	 * logical packages by the amount of !present siblings, but this is
+	 * still better than MAX_LOCAL_APIC.
+	 *
+	 * We use total_cpus not nr_cpu_ids because nr_cpu_ids can be limited
+	 * on the command line leading to a similar issue as the HT disable
+	 * problem because the hyperthreads are usually enumerated after the
+	 * primary cores.
+	 */
+	ncpus = boot_cpu_data.x86_max_cores;
+	if (!ncpus) {
+		pr_warn("x86_max_cores == zero !?!?");
+		ncpus = 1;
+	}
+
+	__max_logical_packages = DIV_ROUND_UP(total_cpus, ncpus);
+
+	/*
+	 * Possibly larger than what we need as the number of apic ids per
+	 * package can be smaller than the actual used apic ids.
+	 */
+	max_physical_pkg_id = DIV_ROUND_UP(MAX_LOCAL_APIC, ncpus);
+	size = max_physical_pkg_id * sizeof(unsigned int);
+	physical_to_logical_pkg = kmalloc(size, GFP_KERNEL);
+	memset(physical_to_logical_pkg, 0xff, size);
+	size = BITS_TO_LONGS(max_physical_pkg_id) * sizeof(unsigned long);
+	physical_package_map = kzalloc(size, GFP_KERNEL);
+	size = BITS_TO_LONGS(__max_logical_packages) * sizeof(unsigned long);
+	logical_package_map = kzalloc(size, GFP_KERNEL);
+
+	pr_info("Max logical packages: %u\n", __max_logical_packages);
+
+	for_each_present_cpu(cpu) {
+		unsigned int apicid = apic->cpu_present_to_apicid(cpu);
+
+		if (apicid == BAD_APICID || !apic->apic_id_valid(apicid))
+			continue;
+		if (!topology_update_package_map(apicid, cpu))
+			continue;
+		pr_warn("CPU %u APICId %x disabled\n", cpu, apicid);
+		per_cpu(x86_bios_cpu_apicid, cpu) = BAD_APICID;
+		set_cpu_possible(cpu, false);
+		set_cpu_present(cpu, false);
+	}
+}
+
 void __init smp_store_boot_cpu_info(void)
 {
 	int id = 0; /* CPU 0 */
@@ -279,6 +422,7 @@ void __init smp_store_boot_cpu_info(void)
 
 	*c = boot_cpu_data;
 	c->cpu_index = id;
+	smp_init_package_map();
 }
 
 /*
@@ -361,7 +505,7 @@ void set_cpu_sibling_map(int cpu)
 	bool has_mp = has_smt || boot_cpu_data.x86_max_cores > 1;
 	struct cpuinfo_x86 *c = &cpu_data(cpu);
 	struct cpuinfo_x86 *o;
-	int i;
+	int i, threads;
 
 	cpumask_set_cpu(cpu, cpu_sibling_setup_mask);
 
@@ -414,6 +558,10 @@ void set_cpu_sibling_map(int cpu)
 				c->booted_cores = cpu_data(i).booted_cores;
 		}
 	}
+
+	threads = cpumask_weight(topology_thread_cpumask(cpu));
+	if (threads > __max_smt_threads)
+		__max_smt_threads = threads;
 }
 
 /* maps the cpu to the sched domain representing multi-core */
@@ -1155,6 +1303,8 @@ void __init native_smp_prepare_cpus(unsigned int max_cpus)
 		uv_system_init();
 
 	set_mtrr_aps_delayed_init();
+
+	speculative_store_bypass_ht_init();
 out:
 	preempt_enable();
 }
@@ -1271,6 +1421,21 @@ __init void prefill_possible_map(void)
 
 #ifdef CONFIG_HOTPLUG_CPU
 
+/* Recompute SMT state for all CPUs on offline */
+static void recompute_smt_state(void)
+{
+	int max_threads, cpu;
+
+	max_threads = 0;
+	for_each_online_cpu (cpu) {
+		int threads = cpumask_weight(topology_thread_cpumask(cpu));
+
+		if (threads > max_threads)
+			max_threads = threads;
+	}
+	__max_smt_threads = max_threads;
+}
+
 static void remove_siblinginfo(int cpu)
 {
 	int sibling;
@@ -1295,6 +1460,7 @@ static void remove_siblinginfo(int cpu)
 	c->phys_proc_id = 0;
 	c->cpu_core_id = 0;
 	cpumask_clear_cpu(cpu, cpu_sibling_setup_mask);
+	recompute_smt_state();
 }
 
 static void __ref remove_cpu_from_maps(int cpu)
@@ -1459,9 +1625,15 @@ void native_play_dead(void)
 	play_dead_common();
 	tboot_shutdown(TB_SHUTDOWN_WFS);
 
+	if (ibrs_inuse)
+		native_wrmsrl(MSR_IA32_SPEC_CTRL, x86_spec_ctrl_base);
+
 	mwait_play_dead();	/* Only returns on failure */
 	if (cpuidle_play_dead())
 		hlt_play_dead();
+
+	if (ibrs_inuse)
+		native_wrmsrl(MSR_IA32_SPEC_CTRL, x86_spec_ctrl_base | SPEC_CTRL_IBRS);
 }
 
 #else /* ... !CONFIG_HOTPLUG_CPU */

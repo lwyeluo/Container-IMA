@@ -985,6 +985,12 @@ typedef u16 (*select_queue_fallback_t)(struct net_device *dev,
  *	Callback to use for xmit over the accelerated station. This
  *	is used in place of ndo_start_xmit on accelerated net
  *	devices.
+ * bool	(*ndo_gso_check) (struct sk_buff *skb,
+ *			  struct net_device *dev);
+ *	Called by core transmit path to determine if device is capable of
+ *	performing GSO on a packet. The device returns true if it is
+ *	able to GSO the packet, false otherwise. If the return value is
+ *	false the stack will do software GSO.
  */
 struct net_device_ops {
 	int			(*ndo_init)(struct net_device *dev);
@@ -1133,6 +1139,8 @@ struct net_device_ops {
 							struct net_device *dev,
 							void *priv);
 	int			(*ndo_get_lock_subclass)(struct net_device *dev);
+	bool			(*ndo_gso_check) (struct sk_buff *skb,
+						  struct net_device *dev);
 };
 
 /*
@@ -1659,7 +1667,10 @@ struct napi_gro_cb {
 	u16	proto;
 
 	/* Used in udp_gro_receive */
-	u16	udp_mark;
+	u8	encap_mark:1;
+
+	/* Number of gro_receive callbacks this packet already went through */
+	u8 recursion_counter:4;
 
 	/* used to support CHECKSUM_COMPLETE for tunneling protocols */
 	__wsum	csum;
@@ -1669,6 +1680,25 @@ struct napi_gro_cb {
 };
 
 #define NAPI_GRO_CB(skb) ((struct napi_gro_cb *)(skb)->cb)
+
+#define GRO_RECURSION_LIMIT 15
+static inline int gro_recursion_inc_test(struct sk_buff *skb)
+{
+	return ++NAPI_GRO_CB(skb)->recursion_counter == GRO_RECURSION_LIMIT;
+}
+
+typedef struct sk_buff **(*gro_receive_t)(struct sk_buff **, struct sk_buff *);
+static inline struct sk_buff **call_gro_receive(gro_receive_t cb,
+						struct sk_buff **head,
+						struct sk_buff *skb)
+{
+	if (gro_recursion_inc_test(skb)) {
+		NAPI_GRO_CB(skb)->flush |= 1;
+		return NULL;
+	}
+
+	return cb(head, skb);
+}
 
 struct packet_type {
 	__be16			type;	/* This is really htons(ether_type). */
@@ -2897,8 +2927,17 @@ extern int		bpf_jit_enable;
 
 bool netdev_has_upper_dev(struct net_device *dev, struct net_device *upper_dev);
 bool netdev_has_any_upper_dev(struct net_device *dev);
+struct net_device *netdev_upper_get_next_dev_rcu(struct net_device *dev,
+						     struct list_head **iter);
 struct net_device *netdev_all_upper_get_next_dev_rcu(struct net_device *dev,
 						     struct list_head **iter);
+
+/* iterate through upper list, must be called under RCU read lock */
+#define netdev_for_each_upper_dev_rcu(dev, updev, iter) \
+	for (iter = &(dev)->adj_list.upper, \
+	     updev = netdev_upper_get_next_dev_rcu(dev, &(iter)); \
+	     updev; \
+	     updev = netdev_upper_get_next_dev_rcu(dev, &(iter)))
 
 /* iterate through upper list, must be called under RCU read lock */
 #define netdev_for_each_all_upper_dev_rcu(dev, updev, iter) \
@@ -3066,10 +3105,12 @@ static inline bool skb_gso_ok(struct sk_buff *skb, netdev_features_t features)
 	       (!skb_has_frag_list(skb) || (features & NETIF_F_FRAGLIST));
 }
 
-static inline bool netif_needs_gso(struct sk_buff *skb,
+static inline bool netif_needs_gso(struct net_device *dev, struct sk_buff *skb,
 				   netdev_features_t features)
 {
 	return skb_is_gso(skb) && (!skb_gso_ok(skb, features) ||
+		(dev->netdev_ops->ndo_gso_check &&
+		 !dev->netdev_ops->ndo_gso_check(skb, dev)) ||
 		unlikely((skb->ip_summed != CHECKSUM_PARTIAL) &&
 			 (skb->ip_summed != CHECKSUM_UNNECESSARY)));
 }

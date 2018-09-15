@@ -49,11 +49,6 @@ static inline int ima_module_check(struct file *file)
 	return 0;
 }
 
-static inline int ima_create_namespace(struct pid_namespace* pid_ns)
-{
-	return 0;
-}
-
 #endif /* CONFIG_IMA */
 
 #ifdef CONFIG_IMA_APPRAISE
