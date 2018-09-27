@@ -31,6 +31,7 @@
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/list.h>
+#include <linux/random.h>
 
 #include "ima.h"
 
@@ -462,8 +463,10 @@ int ima_record_task_for_ns(unsigned int mnt_ns_num) {
 int ima_get_random(u8 *out, size_t max) {
 	int result = 0;
 
-	if (!ima_used_chip)
-		return result;
+	if (!ima_used_chip) {
+		get_random_bytes(out, max);
+		return max;
+	}
 
 	result = tpm_get_random(TPM_ANY_NUM, out, max);
 	if (result < 0)
