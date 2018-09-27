@@ -2,14 +2,14 @@
 
 ## Quick Start
 
-Currently, we only support the Ubuntu 14.04.5 64bit.
+Currently, we only support the Ubuntu 14.04 64bit.
 
 ```
 root@wluo:~# cat /etc/lsb-release 
 DISTRIB_ID=Ubuntu
 DISTRIB_RELEASE=14.04
 DISTRIB_CODENAME=trusty
-DISTRIB_DESCRIPTION="Ubuntu 14.04.5 LTS"
+DISTRIB_DESCRIPTION="Ubuntu 14.04 LTS"
 ```
 
 The docker version is:
